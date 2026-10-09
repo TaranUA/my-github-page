@@ -1,292 +1,2359 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GitHub Pages Starter App</title>
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    fontFamily: {
-                        sans: ['Inter', 'sans-serif'],
-                    },
-                },
-            },
-        }
-    </script>
-    <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <!-- FontAwesome Icons -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FPV Wiring Schematic Builder — Phase 1</title>
+<style>
+  /* ============================================================
+     PHASE 1 — FPV Visual Wiring Schematic Builder
+     Single-file, client-side only (GitHub Pages ready).
+     Sections:
+       1. Theme tokens & base layout
+       2. Header / toolbar UI
+       3. SVG canvas & background modes
+       4. Board, pad, connector & wire styling
+       5. Responsive tweaks
+     ============================================================ */
+
+  :root{
+    --casing: rgba(255,255,255,.30);   /* wire outline on dark backgrounds */
+    --ui-bg: #0b1220;
+    --ui-panel: #111a2b;
+    --ui-panel-2: #17233a;
+    --ui-border: #263451;
+    --ui-text: #e5edf7;
+    --ui-muted: #8ea3c0;
+    --ui-accent: #38bdf8;
+    --ui-accent-2: #22c55e;
+  }
+
+  *{ box-sizing: border-box; }
+  html,body{ margin:0; padding:0; height:100%; }
+  body{
+    font-family: "Segoe UI", Inter, system-ui, -apple-system, Roboto, sans-serif;
+    background: var(--ui-bg);
+    color: var(--ui-text);
+    overflow: hidden;                 /* the canvas scrolls, not the page */
+  }
+
+  /* ---------- 1. App shell ---------- */
+  #app{ display:flex; flex-direction:column; height:100vh; }
+
+  /* ---------- 2. Header toolbar ---------- */
+  header{
+    display:flex; flex-wrap:wrap; align-items:center; gap:10px 18px;
+    padding:10px 16px;
+    background: linear-gradient(180deg, var(--ui-panel), var(--ui-panel-2));
+    border-bottom:1px solid var(--ui-border);
+    box-shadow:0 2px 14px rgba(0,0,0,.35);
+    z-index:10;
+  }
+  .brand{ display:flex; align-items:center; gap:10px; margin-right:auto; }
+  .brand .logo{
+    width:30px; height:30px; border-radius:8px;
+    background: linear-gradient(135deg, var(--ui-accent), var(--ui-accent-2));
+    display:grid; place-items:center; font-weight:800; color:#02121f;
+  }
+  .brand h1{ font-size:15px; margin:0; font-weight:700; letter-spacing:.2px; }
+  .brand p{ margin:0; font-size:10.5px; color:var(--ui-muted); }
+
+  .control{ display:flex; align-items:center; gap:6px; font-size:12px; color:var(--ui-muted); }
+  .control > label{ font-size:11px; text-transform:uppercase; letter-spacing:.6px; }
+
+  select, button{
+    font-family:inherit; font-size:12px; color:var(--ui-text);
+    background:var(--ui-panel-2);
+    border:1px solid var(--ui-border);
+    border-radius:8px; padding:6px 10px; cursor:pointer;
+    transition: background .15s, border-color .15s, transform .05s;
+  }
+  select:hover, button:hover{ background:#1e2c46; border-color:#33456b; }
+  button:active{ transform:translateY(1px); }
+  button:focus-visible, select:focus-visible{ outline:2px solid var(--ui-accent); outline-offset:1px; }
+
+  /* Segmented Edit / Preview toggle */
+  .segmented{ display:flex; background:var(--ui-bg); border:1px solid var(--ui-border); border-radius:9px; padding:2px; }
+  .segmented button{
+    border:none; background:transparent; padding:6px 14px; border-radius:7px;
+    font-weight:600; color:var(--ui-muted);
+  }
+  .segmented button.active{ background:var(--ui-accent); color:#02121f; }
+
+  .zoom-group{ display:flex; align-items:center; gap:4px; }
+  .zoom-group button{ width:30px; padding:6px 0; text-align:center; font-weight:700; }
+  #zoomLabel{ min-width:46px; text-align:center; font-variant-numeric:tabular-nums; font-size:12px; color:var(--ui-text); }
+
+  /* ---------- 3. SVG canvas ---------- */
+  #canvas{
+    flex:1; display:block; width:100%;
+    background:#0f172a;                 /* replaced dynamically per background mode */
+    cursor: grab;
+    touch-action: none;                 /* we handle all pointer gestures */
+    user-select: none;
+  }
+  body.is-panning #canvas{ cursor: grabbing; }
+
+  .grid-fill{ pointer-events:none; }
+
+  /* ---------- 4. Board / pad / connector / wire styling ---------- */
+  .board-shadow{ fill: rgba(0,0,0,.45); }
+  .board-body{ fill:#1f2937; stroke:#4b5563; stroke-width:1.5; }
+  .board-inner{ fill:none; stroke:rgba(148,163,184,.35); stroke-width:.8; }
+  .comp-label{ fill:#cbd5e1; font-size:9.5px; font-weight:600; text-anchor:middle; }
+
+  .hole-ring{ fill:#0b1220; stroke:#7c8aa3; stroke-width:1; }
+  .hole-copper{ fill:none; stroke:#b9922f; stroke-width:1; }
+
+  /* Solder pads */
+  .pad-hit{ fill:transparent; }
+  .pad-copper{ fill:#e0a83c; stroke:#8a6a1c; stroke-width:.7; }
+  .pad-dot{ fill:#3b2c07; }
+  .pad-label{ fill:#dbe6f5; font-size:7px; font-weight:600; paint-order:stroke; stroke:#0b1220; stroke-width:1.6px; }
+
+  /* Connector pin snap targets */
+  .pin-hit{ fill:transparent; }
+  .pin-copper{ fill:#e0a83c; stroke:#8a6a1c; stroke-width:.6; }
+
+  /* Connector bodies */
+  .conn-body-jst{ fill:#0d1117; stroke:#8ea3c0; stroke-width:1; }
+  .conn-key-jst{ fill:#8ea3c0; }
+  .conn-body-xt{ fill:#e7b53a; stroke:#8a6a1c; stroke-width:1; }
+  .conn-pin-xt{ fill:#2b2b2b; stroke:#1a1a1a; stroke-width:.8; }
+  .conn-body-gh{ fill:#151b24; stroke:#b6c2d4; stroke-width:1; }
+  .conn-key-gh{ fill:#b6c2d4; }
+  .conn-body-usb{ fill:#c7ced8; stroke:#7c8695; stroke-width:1; }
+  .conn-usb-tongue{ fill:#2a303a; }
+  .conn-usb-dot{ fill:#8a919c; }
+  .conn-label{ fill:#9fb2cc; font-size:6px; text-anchor:middle; }
+
+  .snap-target{ cursor: crosshair; }
+  body[data-mode="preview"] .snap-target{ cursor: default; }
+  .component{ cursor: move; }
+  body[data-mode="preview"] .component{ cursor: default; }
+  body[data-mode="preview"] .pad-label,
+  body[data-mode="preview"] .conn-label{ opacity:1; }
+
+  /* Wires */
+  .wire{ fill:none; stroke-width:3; stroke-linecap:round; stroke-linejoin:round; }
+  .wire-casing{ fill:none; stroke:var(--casing); stroke-width:6; stroke-linecap:round; stroke-linejoin:round; }
+  .wire-temp{ stroke-dasharray:7 5; opacity:.95; }
+  .wire-stripe{ fill:none; stroke-linecap:round; stroke-linejoin:round; pointer-events:none; }
+  /* Invisible wide band so thin wires are still easy to click/select */
+  .wire-hit{ fill:none; stroke:#7dd3fc; stroke-opacity:0; stroke-width:14; pointer-events:stroke; cursor:pointer; }
+  .wire-hit.sel{ stroke-opacity:.22; }
+  body[data-mode="preview"] .wire-hit{ pointer-events:none; }
+  .wire.sel, .wire-casing.sel{ filter: drop-shadow(0 0 5px var(--ui-accent)); }
+
+  /* Dark wire outlines on light backgrounds so black GND wires stay visible */
+  body[data-bg="light_grid"], body[data-bg="clean_white"]{ --casing: rgba(0,0,0,.28); }
+
+  /* Magnetic snap halo (pulsing glow ring) */
+  .snap-halo{
+    fill:none; stroke:#38bdf8; stroke-width:2.5;
+    filter: drop-shadow(0 0 6px #38bdf8);
+    animation: pulse 1s ease-in-out infinite;
+    pointer-events:none;
+  }
+  @keyframes pulse{
+    0%,100%{ r:10; opacity:.85; }
+    50%    { r:14; opacity:.35; }
+  }
+
+  /* ---------- 4b. Selection highlight ---------- */
+  .component.selected .board-body{ stroke:var(--ui-accent); stroke-width:2; }
+  .sel-box{ fill:none; stroke:var(--ui-accent); stroke-width:1; stroke-dasharray:5 3; pointer-events:none; }
+  .sel-handle{ fill:#0b1220; stroke:var(--ui-accent); stroke-width:1.2; pointer-events:none; }
+  body[data-mode="preview"] .sel-box,
+  body[data-mode="preview"] .sel-handle{ display:none; }
+
+  /* ---------- 4c. Properties panel ---------- */
+  #propPanel{
+    /* Anchored to a JS-set top (below the header) and above the status bar,
+       so the panel never runs off the bottom of the screen. */
+    position:fixed; top:70px; bottom:36px; right:12px; width:306px;
+    overflow-y:auto; overflow-x:hidden;
+    background:var(--ui-panel); border:1px solid var(--ui-border);
+    border-radius:12px; box-shadow:0 14px 44px rgba(0,0,0,.55);
+    padding:12px 12px 16px; z-index:20; display:none;
+  }
+  body[data-mode="edit"] #propPanel.open{ display:block; }
+  .pp-head{ display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  .pp-head h2{ font-size:13px; margin:0; flex:1; }
+  .pp-close{ background:transparent; border:none; color:var(--ui-muted); font-size:18px; line-height:1; padding:0 4px; }
+  .pp-close:hover{ color:var(--ui-text); }
+  .pp-section{ border-top:1px solid var(--ui-border); padding-top:9px; margin-top:9px; }
+  .pp-section > h3{ font-size:10.5px; text-transform:uppercase; letter-spacing:.7px; color:var(--ui-muted); margin:0 0 7px; }
+  .pp-row{ display:flex; align-items:center; gap:8px; margin-bottom:6px; min-width:0; }
+  .pp-row > label{ flex:0 0 58px; font-size:11px; color:var(--ui-muted); }
+  .pp-row input, .pp-row select{
+    flex:1 1 0; width:100%; min-width:0; font-size:12px; color:var(--ui-text);
+    background:var(--ui-bg); border:1px solid var(--ui-border); border-radius:7px; padding:5px 7px;
+  }
+  /* min-width:0 on grid children stops 1fr tracks blowing past the panel width */
+  .pp-grid2{ display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .pp-grid2 > *{ min-width:0; }
+  .pp-grid2 .pp-row > label{ flex-basis:44px; }
+  .pp-corner{ display:grid; grid-template-columns:1fr 70px; gap:5px; align-items:center; margin-bottom:5px; }
+  .pp-corner > span{ font-size:10px; color:var(--ui-muted); grid-column:1 / -1; margin-bottom:-2px; }
+  .pp-corner select, .pp-corner input{ font-size:11px; padding:4px 5px; }
+  .pp-btnrow{ display:flex; flex-wrap:wrap; gap:6px; }
+  .pp-btnrow button{ flex:1; padding:6px 6px; font-size:11px; white-space:nowrap; }
+  .pp-btnrow button.on{ background:var(--ui-accent); color:#02121f; border-color:var(--ui-accent); font-weight:700; }
+  .pp-danger{ color:#fca5a5 !important; border-color:#7f1d1d !important; }
+  .pp-danger:hover{ background:#3b1220 !important; }
+  /* Pad editor: two compact lines per pad (identity, then position) */
+  .pad-item{ border:1px solid var(--ui-border); border-radius:8px; padding:6px; margin-bottom:6px; background:rgba(0,0,0,.15); }
+  .pad-line{ display:flex; gap:5px; align-items:center; }
+  .pad-line + .pad-line{ margin-top:5px; }
+  .pad-line > *{ min-width:0; }
+  .pad-item input[type=checkbox]{ flex:0 0 auto; width:14px; height:14px; accent-color:var(--ui-accent); }
+  .pad-item input[type=text]{ flex:1 1 auto; }
+  .pad-item input, .pad-item select{
+    font-size:11px; color:var(--ui-text); background:var(--ui-bg);
+    border:1px solid var(--ui-border); border-radius:6px; padding:3px 5px;
+  }
+  .pad-item .grow{ flex:1 1 0; }
+  .pad-item .pos-in{ flex:0 0 64px; }
+  .pad-tag{ flex:0 0 30px; font-size:9px; color:var(--ui-muted); text-transform:uppercase; letter-spacing:.5px; }
+  .pad-del{ flex:0 0 auto; background:transparent; border:none; color:#fca5a5; cursor:pointer; font-size:15px; line-height:1; padding:0 2px; }
+  .pp-hint{ font-size:10px; color:var(--ui-muted); margin:6px 0 0; line-height:1.4; }
+  /* Edge / group editor */
+  .edge-sec{ border:1px solid var(--ui-border); border-radius:9px; padding:7px; margin-bottom:8px; background:rgba(0,0,0,.12); }
+  .edge-title{ font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.8px; color:var(--ui-accent); margin-bottom:6px; }
+  .grp-list{ display:flex; flex-direction:column; gap:6px; min-height:14px; }
+  .grp-card{ border:1px solid var(--ui-border); border-radius:8px; padding:6px; background:rgba(255,255,255,.03); }
+  .grp-card.drop-target, .grp-list.drop-target, .pad-item.drop-target{ outline:2px dashed var(--ui-accent); outline-offset:1px; }
+  .grp-head{ display:flex; align-items:center; gap:5px; margin-bottom:6px; }
+  .grp-head select{ flex:1 1 auto; min-width:0; font-size:10px; padding:3px 4px;
+    color:var(--ui-text); background:var(--ui-bg); border:1px solid var(--ui-border); border-radius:6px; }
+  .grp-grip, .pad-grip{ flex:0 0 auto; cursor:grab; color:var(--ui-muted); font-size:13px; line-height:1; }
+  .grp-grip:active, .pad-grip:active{ cursor:grabbing; }
+  .pad-grip{ font-size:14px; padding:0 1px; }
+  .grp-kind{ flex:0 0 auto; font-size:10px; font-weight:700; color:var(--ui-muted); text-transform:uppercase; letter-spacing:.5px; }
+  .grp-pads{ margin-top:6px; }
+  .grp-card .pad-item:last-child{ margin-bottom:0; }
+  .grp-card button{ font-size:10.5px; padding:4px 6px; }
+  .grp-card .pad-line{ margin-bottom:6px; }
+  .grp-card .pad-line > *{ min-width:0; }
+  .grp-card .pad-line input, .grp-card .pad-line select{
+    font-size:11px; color:var(--ui-text); background:var(--ui-bg);
+    border:1px solid var(--ui-border); border-radius:6px; padding:3px 5px;
+  }
+  .grp-card .pad-line .pos-in{ flex:0 0 56px; }
+  .grp-card .pad-line .grow{ flex:1 1 0; }
+  .grp-card .pad-line > button{ flex:0 0 auto; }
+  .pp-legend{ display:flex; align-items:center; gap:6px; font-size:10px; color:var(--ui-muted); }
+
+  /* ---------- 5. Status bar ---------- */
+  #status{
+    display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+    padding:6px 16px; font-size:11px; color:var(--ui-muted);
+    background:var(--ui-panel); border-top:1px solid var(--ui-border);
+  }
+  #status b{ color:var(--ui-text); font-weight:600; }
+  #hoverInfo{ margin-left:auto; color:var(--ui-accent); }
+
+  /* Checkerboard shown only in Transparent background mode */
+  #canvas.bg-transparent{
+    background-color:#2a3446;
+    background-image:
+      linear-gradient(45deg,#3a465c 25%,transparent 25%),
+      linear-gradient(-45deg,#3a465c 25%,transparent 25%),
+      linear-gradient(45deg,transparent 75%,#3a465c 75%),
+      linear-gradient(-45deg,transparent 75%,#3a465c 75%);
+    background-size:22px 22px;
+    background-position:0 0,0 11px,11px -11px,-11px 0;
+  }
+</style>
 </head>
-<body class="bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-100 font-sans transition-colors duration-300 min-h-screen flex flex-col">
+<body data-mode="edit" data-bg="dark_grid">
 
-    <!-- Navigation / Header -->
-    <header class="bg-white dark:bg-gray-800 shadow-md transition-colors duration-300">
-        <div class="max-w-6xl mx-auto px-4 py-4 flex flex-wrap justify-between items-center gap-4">
-            <div class="flex items-center space-x-3">
-                <div class="bg-indigo-600 text-white p-2 rounded-lg shadow-lg">
-                    <i class="fa-brands fa-github text-2xl"></i>
-                </div>
-                <div>
-                    <h1 class="text-xl font-bold tracking-tight">GitHub Pages Demo</h1>
-                    <p class="text-xs text-gray-500 dark:text-gray-400">Static Host Test Application</p>
-                </div>
-            </div>
+<div id="app">
 
-            <!-- Status Indicator and Dark Mode Toggle -->
-            <div class="flex items-center space-x-4">
-                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300">
-                    <span class="w-2 h-2 mr-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
-                    GitHub Pages Ready
-                </span>
-                <button id="themeToggle" class="p-2.5 rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600 transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500" aria-label="Toggle Theme">
-                    <i id="themeIcon" class="fa-solid fa-moon text-lg"></i>
-                </button>
-            </div>
-        </div>
-    </header>
+  <!-- ============ HEADER / TOOLBAR ============ -->
+  <header>
+    <div class="brand">
+      <div class="logo">FPV</div>
+      <div>
+        <h1>FPV Wiring Schematic Builder</h1>
+        <p>Phase 3 — wiring engine: routing, gauge &amp; wire styling</p>
+      </div>
+    </div>
 
-    <!-- Main Content Container -->
-    <main class="max-w-6xl mx-auto px-4 py-8 flex-grow w-full grid grid-cols-1 md:grid-cols-3 gap-6">
+    <!-- Edit vs Preview -->
+    <div class="control">
+      <div class="segmented" id="modeSwitch">
+        <button data-mode="edit" class="active">Edit</button>
+        <button data-mode="preview">Preview</button>
+      </div>
+    </div>
 
-        <!-- Left Column: Clock & Status -->
-        <section class="space-y-6">
-            <!-- Clock Card -->
-            <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 transition-colors duration-300">
-                <div class="flex items-center justify-between mb-2">
-                    <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">System Time</h2>
-                    <i class="fa-regular fa-clock text-indigo-500"></i>
-                </div>
-                <div id="clock" class="text-3xl font-extrabold tracking-tight text-gray-900 dark:text-white my-1">
-                    00:00:00 AM
-                </div>
-                <div id="date" class="text-xs text-gray-500 dark:text-gray-400">
-                    Loading date...
-                </div>
-            </div>
+    <!-- Background modes -->
+    <div class="control">
+      <label for="bgSelect">Background</label>
+      <select id="bgSelect">
+        <option value="dark_grid">Dark Grid</option>
+        <option value="light_grid">Light Grid</option>
+        <option value="blueprint">Blueprint</option>
+        <option value="clean_white">Clean White</option>
+        <option value="transparent">Transparent</option>
+      </select>
+    </div>
 
-            <!-- Interactive Counter Card -->
-            <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 transition-colors duration-300">
-                <div class="flex items-center justify-between mb-4">
-                    <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">Interactive Counter</h2>
-                    <i class="fa-solid fa-calculator text-indigo-500"></i>
-                </div>
-                <div class="text-center py-2">
-                    <span id="counterValue" class="text-5xl font-black text-indigo-600 dark:text-indigo-400">0</span>
-                </div>
-                <div class="flex gap-2 mt-4">
-                    <button id="decrementBtn" class="flex-1 py-2 px-3 bg-red-100 hover:bg-red-200 dark:bg-red-900/30 dark:hover:bg-red-900/50 text-red-600 dark:text-red-300 font-semibold rounded-xl transition text-sm">
-                        -1
-                    </button>
-                    <button id="resetBtn" class="py-2 px-3 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 font-semibold rounded-xl transition text-sm">
-                        Reset
-                    </button>
-                    <button id="incrementBtn" class="flex-1 py-2 px-3 bg-emerald-100 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:hover:bg-emerald-900/50 text-emerald-600 dark:text-emerald-300 font-semibold rounded-xl transition text-sm">
-                        +1
-                    </button>
-                </div>
-            </div>
+    <!-- Grid snapping for component bodies -->
+    <div class="control">
+      <label for="snapSelect">Grid Snap</label>
+      <select id="snapSelect">
+        <option value="1">1 mm</option>
+        <option value="2">2 mm</option>
+        <option value="5" selected>5 mm</option>
+        <option value="0">Off</option>
+      </select>
+    </div>
 
-            <!-- Deployment Checklist -->
-            <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 transition-colors duration-300">
-                <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">Deployment Checklist</h2>
-                <ul class="space-y-2 text-xs text-gray-600 dark:text-gray-300">
-                    <li class="flex items-center"><i class="fa-solid fa-circle-check text-emerald-500 mr-2"></i> File named <code>index.html</code></li>
-                    <li class="flex items-center"><i class="fa-solid fa-circle-check text-emerald-500 mr-2"></i> Placed in repository root</li>
-                    <li class="flex items-center"><i class="fa-solid fa-circle-check text-emerald-500 mr-2"></i> Standard HTML5/JS/CSS</li>
-                    <li class="flex items-center"><i class="fa-solid fa-circle-check text-emerald-500 mr-2"></i> Client-side LocalStorage support</li>
-                </ul>
-            </div>
-        </section>
+    <!-- Zoom controls -->
+    <div class="control">
+      <div class="zoom-group">
+        <button id="zoomOut" title="Zoom out">&minus;</button>
+        <span id="zoomLabel">100%</span>
+        <button id="zoomIn" title="Zoom in">+</button>
+        <button id="zoomReset" title="Reset view">Reset</button>
+      </div>
+    </div>
 
-        <!-- Right Column: Task Manager (Takes 2 columns on medium screens) -->
-        <section class="md:col-span-2 space-y-6">
-            <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 transition-colors duration-300 h-full flex flex-col">
-                <div class="flex items-center justify-between mb-6">
-                    <div>
-                        <h2 class="text-lg font-bold">Client-Side Task Manager</h2>
-                        <p class="text-xs text-gray-500 dark:text-gray-400">Tasks are stored locally in your browser's LocalStorage</p>
-                    </div>
-                    <span id="taskCount" class="text-xs font-semibold bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-300 px-3 py-1 rounded-full">0 Tasks</span>
-                </div>
+    <!-- Add a component instance from the built-in hardware library -->
+    <div class="control">
+      <label for="libSelect">Library</label>
+      <select id="libSelect"></select>
+      <button id="addComp" title="Place the selected template at the view centre">+ Add</button>
+    </div>
 
-                <!-- Input Form -->
-                <form id="taskForm" class="flex gap-2 mb-6">
-                    <input 
-                        type="text" 
-                        id="taskInput" 
-                        placeholder="Add a new task..." 
-                        required
-                        class="flex-1 px-4 py-2.5 rounded-xl border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition text-sm"
-                    >
-                    <button 
-                        type="submit" 
-                        class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-xl transition flex items-center gap-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    >
-                        <i class="fa-solid fa-plus text-xs"></i> Add
-                    </button>
-                </form>
+    <div class="control">
+      <button id="resetSetup" title="Restore the built-in test components">Reset Test Setup</button>
+    </div>
+  </header>
 
-                <!-- Task List -->
-                <div class="flex-grow overflow-y-auto">
-                    <ul id="taskList" class="space-y-2 max-h-[350px] pr-1">
-                        <!-- Tasks rendered dynamically -->
-                    </ul>
-                    <div id="emptyState" class="text-center py-10 text-gray-400 dark:text-gray-500">
-                        <i class="fa-regular fa-clipboard text-4xl mb-3 block"></i>
-                        <p class="text-sm">No tasks added yet. Add one above!</p>
-                    </div>
-                </div>
-            </div>
-        </section>
-    </main>
+  <!-- ============ SVG CANVAS ============ -->
+  <svg id="canvas" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <!-- Minor grid (5 mm) + major grid (25 mm) patterns.
+           patternUnits=userSpaceOnUse so they live in world coordinates and
+           therefore pan & zoom together with the canvas. -->
+      <pattern id="gridMinor" patternUnits="userSpaceOnUse" width="15" height="15">
+        <path id="gridMinorPath" d="M 15 0 L 0 0 0 15" fill="none" stroke="#1e293b" stroke-width="0.6"/>
+      </pattern>
+      <pattern id="gridMajor" patternUnits="userSpaceOnUse" width="75" height="75">
+        <rect width="75" height="75" fill="url(#gridMinor)"/>
+        <path id="gridMajorPath" d="M 75 0 L 0 0 0 75" fill="none" stroke="#334155" stroke-width="1.1"/>
+      </pattern>
+    </defs>
 
-    <!-- Footer -->
-    <footer class="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 py-4 transition-colors duration-300">
-        <div class="max-w-6xl mx-auto px-4 text-center text-xs text-gray-500 dark:text-gray-400">
-            Hosted free with <i class="fa-solid fa-heart text-red-500 mx-1"></i> on <strong>GitHub Pages</strong>
-        </div>
-    </footer>
+    <!-- World group: everything inside is transformed by pan + zoom -->
+    <g id="world">
+      <rect id="bgFill" class="grid-fill" x="-100000" y="-100000" width="200000" height="200000" fill="#0f172a"/>
+      <rect id="bgGrid" class="grid-fill" x="-100000" y="-100000" width="200000" height="200000" fill="url(#gridMajor)"/>
+      <g id="layerWires"></g>
+      <g id="layerComponents"></g>
+      <g id="layerOverlay"></g>
+    </g>
+  </svg>
 
-    <script>
-        // --- 1. Theme Management ---
-        const themeToggleBtn = document.getElementById('themeToggle');
-        const themeIcon = document.getElementById('themeIcon');
-        
-        // Load theme from localStorage or default to dark
-        const savedTheme = localStorage.getItem('gh_demo_theme') || 'dark';
-        if (savedTheme === 'dark') {
-            document.documentElement.classList.add('dark');
-            themeIcon.classList.replace('fa-sun', 'fa-moon');
+  <!-- ============ COMPONENT PROPERTIES PANEL (built dynamically) ============ -->
+  <aside id="propPanel" aria-label="Component properties"></aside>
+
+  <!-- ============ STATUS BAR ============ -->
+  <div id="status">
+    <span><b>Drag</b> a board to move</span>
+    <span><b>Click a pad</b> to draw a wire</span>
+    <span><b>Click a wire</b> to style it</span>
+    <span><b>Middle-drag / Space+drag</b> to pan</span>
+    <span><b>Wheel</b> to zoom</span>
+    <span id="hoverInfo"></span>
+  </div>
+</div>
+
+<script>
+/* ==================================================================
+   FPV Visual Wiring Schematic Builder — Phase 1 logic
+   ------------------------------------------------------------------
+   Coordinate systems:
+     - "world" units == SVG user units (px at zoom 1).
+     - Boards are authored in millimetres and scaled by SCALE (3 px/mm).
+     - Screen point s relates to world point w by:  s = pan + w * zoom
+   ================================================================== */
+
+/* ------------------------- constants ---------------------------- */
+const SCALE = 3;                 // px per millimetre (per project decision)
+const SNAP_RADIUS_PX = 15;       // magnetic pad snap radius, in *screen* px
+const MIN_ZOOM = 0.1, MAX_ZOOM = 5.0;
+const STORAGE_KEY = 'fpv_builder_phase1_v1';
+
+const EDGES = ['top', 'right', 'bottom', 'left'];   // canonical edge order
+const PAD_INSET = 1.5;                              // mm from edge to pad centre
+
+/* Wire gauge (AWG) -> on-screen stroke width (px). Thicker == lower AWG. */
+const WIRE_GAUGES = { 12:6.2, 14:5.4, 16:4.7, 18:4.0, 20:3.4, 22:2.9, 24:2.5, 26:2.1, 28:1.8, 30:1.5 };
+const GAUGE_OPTS  = [12, 14, 16, 18, 20, 22, 24, 26, 28, 30];
+function gaugeWidth(awg) { return WIRE_GAUGES[Number(awg)] || 2.6; }
+
+/* ------------------------- DOM refs ----------------------------- */
+const svg        = document.getElementById('canvas');
+const world      = document.getElementById('world');
+const bgFill     = document.getElementById('bgFill');
+const bgGrid     = document.getElementById('bgGrid');
+const gridMinorPath = document.getElementById('gridMinorPath');
+const gridMajorPath = document.getElementById('gridMajorPath');
+const layerWires = document.getElementById('layerWires');
+const layerComponents = document.getElementById('layerComponents');
+const layerOverlay = document.getElementById('layerOverlay');
+const zoomLabel  = document.getElementById('zoomLabel');
+const hoverInfo  = document.getElementById('hoverInfo');
+const panel      = document.getElementById('propPanel');
+const libSelect  = document.getElementById('libSelect');
+
+/* =================================================================
+   1. TEMPLATE LIBRARY  (parametric board definitions, in millimetres)
+   ================================================================= */
+/* Helper builders for the edge-group model:
+   every edge holds an ORDERED list of groups; a group is either a "pads"
+   group (evenly spaced pads, single spacing value) or a "connector". */
+function padsGroup(id, align, spacing, pads, cross, name, labelSide) {
+  // `cross`     = mm inset from the edge (lets one edge hold stacked rows);
+  // `name`      = optional display label for the group (e.g. "Motor 4");
+  // `labelSide` = 'top'|'bottom' (top/bottom edges) or 'left'|'right'
+  //               (side edges); '' = auto (outer row outward, inner row inward).
+  return { id, kind: 'pads', align, spacing, pads,
+           cross: cross || 0, name: name || '', labelSide: labelSide || '' };
+}
+
+/** Where a pads group's labels sit; auto when not explicitly set. */
+function resolveLabelSide(edge, g) {
+  if (g.labelSide) return g.labelSide;
+  const outer = (g.cross || 0) === 0;
+  if (edge === 'top')    return outer ? 'top' : 'bottom';
+  if (edge === 'bottom') return outer ? 'bottom' : 'top';
+  if (edge === 'left')   return outer ? 'left' : 'right';
+  return outer ? 'right' : 'left';                 // right edge
+}
+function connGroup(id, align, conn) {
+  return { id, kind: 'connector', align, conn };
+}
+
+const TEMPLATES = {
+  /* --- Flight Controller: 39x39, 30.5x30.5 mounts, dual pad rows top/bottom --- */
+  fc: {
+    template_id: 'fc',
+    name: 'Flight Controller',
+    width: 39, height: 39,
+    corners: {
+      top_left:{type:'round',size:4}, top_right:{type:'round',size:4},
+      bottom_left:{type:'round',size:4}, bottom_right:{type:'round',size:4}
+    },
+    mounting_holes: { pattern: '30.5x30.5', diameter: 3 },
+    edges: {
+      top: [
+        padsGroup('g_fc_top_r1', 'center', 3, [
+          { id:'fc_5v1', label:'5V',  signal_type:'power_pos', visible:true },
+          { id:'fc_g1',  label:'G',   signal_type:'ground',    visible:true },
+          { id:'fc_cam', label:'CAM', signal_type:'video',     visible:true },
+          { id:'fc_cc',  label:'CC',  signal_type:'aux',       visible:true },
+          { id:'fc_bp',  label:'B+',  signal_type:'power_pos', visible:true },
+          { id:'fc_bm',  label:'B-',  signal_type:'ground',    visible:true },
+          { id:'fc_pp',  label:'P+',  signal_type:'power_pos', visible:true },
+          { id:'fc_pm',  label:'P-',  signal_type:'ground',    visible:true },
+          { id:'fc_g2',  label:'G',   signal_type:'ground',    visible:true },
+          { id:'fc_5v2', label:'5V',  signal_type:'power_pos', visible:true },
+          { id:'fc_led', label:'LED', signal_type:'aux',       visible:true }
+        ], 0, 'Row 1'),
+        padsGroup('g_fc_top_r2', 'center', 3, [
+          { id:'fc_t2',    label:'T2',  signal_type:'uart_tx',   visible:true },
+          { id:'fc_r2',    label:'R2',  signal_type:'uart_rx',   visible:true },
+          { id:'fc_4v5_a', label:'4V5', signal_type:'power_pos', visible:true },
+          { id:'fc_g3',    label:'G',   signal_type:'ground',    visible:true },
+          { id:'fc_g4',    label:'G',   signal_type:'ground',    visible:true },
+          { id:'fc_5v3',   label:'5V',  signal_type:'power_pos', visible:true },
+          { id:'fc_s5',    label:'S5',  signal_type:'aux',       visible:true },
+          { id:'fc_g5',    label:'G',   signal_type:'ground',    visible:true },
+          { id:'fc_5v4',   label:'5V',  signal_type:'power_pos', visible:true },
+          { id:'fc_s6',    label:'S6',  signal_type:'aux',       visible:true }
+        ], 4, 'Row 2')
+      ],
+      bottom: [
+        padsGroup('g_fc_bot_r1', 'center', 3, [
+          { id:'fc_g6',   label:'G',    signal_type:'ground',    visible:true },
+          { id:'fc_t4',   label:'T4',   signal_type:'uart_tx',   visible:true },
+          { id:'fc_r4',   label:'R4',   signal_type:'uart_rx',   visible:true },
+          { id:'fc_5v5',  label:'5V',   signal_type:'power_pos', visible:true },
+          { id:'fc_vtx',  label:'VTX',  signal_type:'video',     visible:true },
+          { id:'fc_g7',   label:'G',    signal_type:'ground',    visible:true },
+          { id:'fc_sbus', label:'SBUS', signal_type:'telemetry', visible:true },
+          { id:'fc_r6',   label:'R6',   signal_type:'uart_rx',   visible:true },
+          { id:'fc_t6',   label:'T6',   signal_type:'uart_tx',   visible:true },
+          { id:'fc_3v3',  label:'3V3',  signal_type:'power_pos', visible:true }
+        ], 0, 'Row 1'),
+        padsGroup('g_fc_bot_r2', 'center', 3, [
+          { id:'fc_da',    label:'DA',  signal_type:'aux',       visible:true },
+          { id:'fc_cl',    label:'CL',  signal_type:'aux',       visible:true },
+          { id:'fc_4v5_b', label:'4V5', signal_type:'power_pos', visible:true },
+          { id:'fc_9v',    label:'9V',  signal_type:'power_pos', visible:true },
+          { id:'fc_g8',    label:'G',   signal_type:'ground',    visible:true },
+          { id:'fc_t3',    label:'T3',  signal_type:'uart_tx',   visible:true },
+          { id:'fc_r3',    label:'R3',  signal_type:'uart_rx',   visible:true },
+          { id:'fc_g9',    label:'G',   signal_type:'ground',    visible:true },
+          { id:'fc_4v5_c', label:'4V5', signal_type:'power_pos', visible:true },
+          { id:'fc_rs',    label:'RS',  signal_type:'aux',       visible:true }
+        ], 4, 'Row 2')
+      ],
+      left: [
+        padsGroup('g_fc_left_top', 'left', 2.54, [
+          { id:'fc_lu_g',  label:'G',  signal_type:'ground',    visible:true },
+          { id:'fc_lu_5v', label:'5V', signal_type:'power_pos', visible:true },
+          { id:'fc_lu_d',  label:'D',  signal_type:'aux',       visible:true }
+        ], 0, 'Upper'),
+        padsGroup('g_fc_left_bot', 'right', 2.54, [
+          { id:'fc_ll_d',  label:'D',  signal_type:'aux',       visible:true },
+          { id:'fc_ll_5v', label:'5V', signal_type:'power_pos', visible:true },
+          { id:'fc_ll_g',  label:'G',  signal_type:'ground',    visible:true }
+        ], 0, 'Lower')
+      ],
+      right: [
+        padsGroup('g_fc_right_top', 'left', 2.54, [
+          { id:'fc_ru_g',  label:'G',  signal_type:'ground',    visible:true },
+          { id:'fc_ru_5v', label:'5V', signal_type:'power_pos', visible:true },
+          { id:'fc_ru_d',  label:'D',  signal_type:'aux',       visible:true }
+        ], 0, 'Upper'),
+        connGroup('g_fc_usb', 'center', { id:'fc_usb', type:'usb_c_port', pins:0 }),
+        padsGroup('g_fc_right_bot', 'right', 2.54, [
+          { id:'fc_rl_d',  label:'D',  signal_type:'aux',       visible:true },
+          { id:'fc_rl_5v', label:'5V', signal_type:'power_pos', visible:true },
+          { id:'fc_rl_g',  label:'G',  signal_type:'ground',    visible:true }
+        ], 0, 'Lower')
+      ]
+    }
+  },
+
+  /* --- ELRS Receiver: 22x18 board, 4 solder pads on the bottom edge --- */
+  elrs: {
+    template_id: 'elrs',
+    name: 'ELRS Receiver',
+    width: 22, height: 18,
+    corners: {
+      top_left:{type:'round',size:2}, top_right:{type:'round',size:2},
+      bottom_left:{type:'round',size:2}, bottom_right:{type:'round',size:2}
+    },
+    mounting_holes: { pattern:'none', diameter:2 },
+    edges: {
+      bottom: [ padsGroup('g_rx_pads', 'center', 4.5, [
+        { id:'rx_rx',  label:'RX',  signal_type:'uart_rx',   visible:true },
+        { id:'rx_tx',  label:'TX',  signal_type:'uart_tx',   visible:true },
+        { id:'rx_5v',  label:'5V',  signal_type:'power_pos', visible:true },
+        { id:'rx_gnd', label:'GND', signal_type:'ground',    visible:true }
+      ]) ],
+      top: [], left: [], right: []
+    }
+  },
+
+  /* --- 4-in-1 ESC: 45x41, 30.5x30.5 mounts, 4 motor groups --- */
+  esc: {
+    template_id: 'esc',
+    name: '4-in-1 ESC',
+    width: 45, height: 41,
+    corners: {
+      top_left:{type:'round',size:3}, top_right:{type:'round',size:3},
+      bottom_left:{type:'round',size:3}, bottom_right:{type:'round',size:3}
+    },
+    mounting_holes: { pattern: '30.5x30.5', diameter: 3 },
+    edges: {
+      top: [ padsGroup('g_esc_top', 'center', 4, [
+        { id:'esc_v',  label:'V', signal_type:'power_pos', visible:true },
+        { id:'esc_g1', label:'G', signal_type:'ground',    visible:true },
+        { id:'esc_c',  label:'C', signal_type:'telemetry', visible:true },
+        { id:'esc_t',  label:'T', signal_type:'telemetry', visible:true },
+        { id:'esc_o1', label:'1', signal_type:'aux',       visible:true },
+        { id:'esc_o2', label:'2', signal_type:'aux',       visible:true },
+        { id:'esc_o3', label:'3', signal_type:'aux',       visible:true },
+        { id:'esc_o4', label:'4', signal_type:'aux',       visible:true }
+      ], 0, 'Signal') ],
+      bottom: [ padsGroup('g_esc_bot', 'center', 6, [
+        { id:'esc_pos', label:'+', signal_type:'power_pos', visible:true },
+        { id:'esc_neg', label:'-', signal_type:'ground',    visible:true }
+      ], 0, 'Power') ],
+      left: [
+        padsGroup('g_esc_m4', 'left', 4, [
+          { id:'m4_1', label:'1', signal_type:'aux', visible:true },
+          { id:'m4_2', label:'2', signal_type:'aux', visible:true },
+          { id:'m4_3', label:'3', signal_type:'aux', visible:true }
+        ], 4, 'Motor 4'),
+        padsGroup('g_esc_m3', 'right', 4, [
+          { id:'m3_1', label:'1', signal_type:'aux', visible:true },
+          { id:'m3_2', label:'2', signal_type:'aux', visible:true },
+          { id:'m3_3', label:'3', signal_type:'aux', visible:true }
+        ], 4, 'Motor 3')
+      ],
+      right: [
+        padsGroup('g_esc_m2', 'left', 4, [
+          { id:'m2_1', label:'1', signal_type:'aux', visible:true },
+          { id:'m2_2', label:'2', signal_type:'aux', visible:true },
+          { id:'m2_3', label:'3', signal_type:'aux', visible:true }
+        ], 4, 'Motor 2'),
+        padsGroup('g_esc_m1', 'right', 4, [
+          { id:'m1_1', label:'1', signal_type:'aux', visible:true },
+          { id:'m1_2', label:'2', signal_type:'aux', visible:true },
+          { id:'m1_3', label:'3', signal_type:'aux', visible:true }
+        ], 4, 'Motor 1')
+      ]
+    }
+  },
+
+  /* --- Analog VTX: 47 x 30.4 board, 6-pin harness on the bottom edge --- */
+  vtx: {
+    template_id: 'vtx',
+    name: 'Analog VTX',
+    width: 47, height: 30.4,
+    corners: {
+      top_left:{type:'round',size:3}, top_right:{type:'round',size:3},
+      bottom_left:{type:'round',size:3}, bottom_right:{type:'round',size:3}
+    },
+    mounting_holes: { pattern:'none', diameter:2 },
+    edges: {
+      bottom: [ padsGroup('g_vtx_pins', 'center', 6, [
+        { id:'vtx_irc',   label:'IRC',     signal_type:'aux',       visible:true },
+        { id:'vtx_vtx',   label:'VTX',     signal_type:'video',     visible:true },
+        { id:'vtx_gnd',   label:'GND',     signal_type:'ground',    visible:true },
+        { id:'vtx_5vout', label:'5V_OUT',  signal_type:'power_pos', visible:true },
+        { id:'vtx_gnd2',  label:'GND',     signal_type:'ground',    visible:true },
+        { id:'vtx_vcc',   label:'VCC_IN',  signal_type:'power_pos', visible:true }
+      ]) ],
+      top: [], left: [], right: []
+    }
+  },
+
+  /* --- Analog Camera: 19x19 board, 3 pins at the top-left --- */
+  camera: {
+    template_id: 'camera',
+    name: 'Analog Camera',
+    width: 19, height: 19,
+    corners: {
+      top_left:{type:'round',size:2}, top_right:{type:'round',size:2},
+      bottom_left:{type:'round',size:2}, bottom_right:{type:'round',size:2}
+    },
+    mounting_holes: { pattern:'none', diameter:2 },
+    edges: {
+      top: [ padsGroup('g_cam_pins', 'left', 3.5, [
+        { id:'cam_vcc', label:'VCC',   signal_type:'power_pos', visible:true },
+        { id:'cam_gnd', label:'GND',   signal_type:'ground',    visible:true },
+        { id:'cam_vid', label:'VIDEO', signal_type:'video',     visible:true }
+      ], 0, 'Pins') ],
+      bottom: [], left: [], right: []
+    }
+  }
+};
+
+/* Deep-clone helper: every placed component owns its own template copy so the
+   parametric editor can modify shape/pads per instance without touching the
+   shared library. */
+const clone = o => JSON.parse(JSON.stringify(o));
+
+/** Resolve the (possibly edited) template for a placed component. */
+function getTemplate(comp) {
+  if (!comp.template) comp.template = clone(TEMPLATES[comp.template_id] || TEMPLATES.fc);
+  return migrateTemplate(comp.template);
+}
+
+/**
+ * Upgrade an old-format template (`pads` + `connectors`) to the edge-group
+ * model. Old saves stored each pad with edge/align/offset and each connector
+ * with a board-local x/y; we regroup pads per edge (even spacing) and nudge
+ * each connector onto its nearest edge.
+ */
+function migrateTemplate(t) {
+  if (!t || t.edges) return t;
+  t.edges = { top: [], right: [], bottom: [], left: [] };
+  const W = t.width, H = t.height;
+
+  EDGES.forEach(edge => {
+    const old = (t.pads || []).filter(p => p.edge === edge)
+      .sort((a, b) => padAlongMM(t, a) - padAlongMM(t, b));
+    if (!old.length) return;
+    let spacing = 6;
+    if (old.length > 1) {
+      let sum = 0;
+      for (let i = 1; i < old.length; i++) {
+        sum += padAlongMM(t, old[i]) - padAlongMM(t, old[i - 1]);
+      }
+      spacing = Math.max(1, sum / (old.length - 1));
+    }
+    t.edges[edge].push(padsGroup('g' + uid(), 'center', spacing, old.map(p => ({
+      id: p.id, label: p.label, signal_type: p.signal_type, visible: p.visible !== false
+    }))));
+  });
+
+  (t.connectors || []).forEach(c => {
+    const dist = { top: c.y, bottom: H - c.y, left: c.x, right: W - c.x };
+    let edge = 'top', best = Infinity;
+    EDGES.forEach(e => { if (dist[e] < best) { best = dist[e]; edge = e; } });
+    const horiz = (edge === 'top' || edge === 'bottom');
+    const len = horiz ? W : H;
+    const frac = len ? ((horiz ? c.x : c.y) / len) : 0.5;
+    const align = frac < 0.34 ? 'left' : frac > 0.66 ? 'right' : 'center';
+    t.edges[edge].push(connGroup('g' + uid(), align, {
+      id: c.id || ('c' + uid()), type: c.type, pins: c.pins, pitch: c.pitch,
+      labels: c.labels, signals: c.signals
+    }));
+  });
+
+  delete t.pads;
+  delete t.connectors;
+  return t;
+}
+
+/* =================================================================
+   2. APPLICATION STATE
+   ================================================================= */
+let state = null;          // filled by loadState()/seedState()
+let interaction = null;    // active gesture: pan | drag | wire
+let spaceDown = false;     // spacebar pan modifier
+let renderQueued = false;
+let selectedId = null;     // currently selected component instance id
+let selectedWireId = null; // currently selected wire id
+
+/* =================================================================
+   3. GEOMETRY HELPERS
+   ================================================================= */
+
+/** Build an SVG path for a board outline with per-corner styling. */
+function boardPath(w, h, corners) {
+  // Resolve each corner to {type, r} where r is the pixel size.
+  const c = {};
+  ['top_left','top_right','bottom_right','bottom_left'].forEach(k => {
+    const cc = (corners && corners[k]) || { type:'square', size:0 };
+    c[k] = { type: cc.type, r: cc.type === 'square' ? 0 : (cc.size || 0) * SCALE };
+  });
+  const tl = c.top_left.r, tr = c.top_right.r, br = c.bottom_right.r, bl = c.bottom_left.r;
+
+  // Corner entry/exit points for a clockwise traversal.
+  const tlExit  = { x: tl,   y: 0 };
+  const trEntry = { x: w - tr, y: 0 };
+  const trExit  = { x: w,    y: tr };
+  const brEntry = { x: w,    y: h - br };
+  const brExit  = { x: w - br, y: h };
+  const blEntry = { x: bl,   y: h };
+  const blExit  = { x: 0,    y: h - bl };
+  const tlEntry = { x: 0,    y: tl };
+
+  // A corner produces either a rounded arc or a straight line (square/chamfer).
+  const seg = (conf, entry, exit) => (
+    (conf.type === 'round' && conf.r > 0)
+      ? ` A ${conf.r} ${conf.r} 0 0 1 ${exit.x} ${exit.y}`
+      : ` L ${exit.x} ${exit.y}`
+  );
+
+  let d = `M ${tlExit.x} ${tlExit.y}`;
+  d += ` L ${trEntry.x} ${trEntry.y}` + seg(c.top_right,    trEntry, trExit);
+  d += ` L ${brEntry.x} ${brEntry.y}` + seg(c.bottom_right, brEntry, brExit);
+  d += ` L ${blEntry.x} ${blEntry.y}` + seg(c.bottom_left,  blEntry, blExit);
+  d += ` L ${tlEntry.x} ${tlEntry.y}` + seg(c.top_left,     tlEntry, tlExit);
+  return d + ' Z';
+}
+
+/** Length of the edge (mm): width for top/bottom, height for the sides. */
+function alongLen(t, edge) {
+  return (edge === 'top' || edge === 'bottom') ? t.width : t.height;
+}
+
+/**
+ * Position (mm, board-local) of a point `along` an edge from its start corner
+ * and `cross` mm inward from that edge:
+ *   top    start = top-left,    along = +x
+ *   right  start = top-right,   along = +y
+ *   bottom start = bottom-left, along = +x
+ *   left   start = top-left,    along = +y
+ */
+function edgeLocal(t, edge, along, cross) {
+  const W = t.width, H = t.height;
+  if (edge === 'top')    return { x: along, y: cross };
+  if (edge === 'bottom') return { x: along, y: H - cross };
+  if (edge === 'left')   return { x: cross, y: along };
+  return { x: W - cross, y: along };               // right
+}
+
+/** mm span a group occupies along its edge (centre-to-centre for pads). */
+function groupLength(t, g) {
+  if (g.kind === 'connector') return connectorGeom(g.conn).bw;
+  const n = (g.pads || []).length;
+  return Math.max(0, (n - 1) * (Number(g.spacing) || 6));
+}
+
+/**
+ * Lay out one edge's ordered groups. List order is primary; each group's
+ * `align` (left/center/right) anchors it and groups are pushed forward so they
+ * never overlap each other.
+ */
+function layoutEdge(t, edge) {
+  const list = (t.edges && t.edges[edge]) || [];
+  if (!list.length) return [];
+  const len = alongLen(t, edge);
+  const margin = 4, gap = 4;
+  const lanes = {};                 // cursor per cross-offset "row"
+  const placed = [];
+  for (const g of list) {
+    const L = groupLength(t, g);
+    const lane = g.cross || 0;
+    const cursor = lanes[lane] || margin;
+    let start = g.align === 'center' ? (len - L) / 2
+              : g.align === 'right'  ? len - margin - L
+              : margin;
+    start = Math.max(start, cursor, margin);
+    start = Math.min(start, Math.max(margin, len - margin - L));
+    placed.push({ group: g, start, L });
+    lanes[lane] = start + L + gap;
+  }
+  return placed;
+}
+
+/** A legacy pad's position along its edge (used only by the old-format migrator). */
+function padAlongMM(t, p) {
+  const len = alongLen(t, p.edge), off = Number(p.offset) || 0;
+  const a = p.align || 'start';
+  return a === 'center' ? len / 2 + off : a === 'end' ? len - off : off;
+}
+
+/** Unit direction a wire leaves a pad, based on which board edge it sits on. */
+function edgeDir(edge) {
+  if (edge === 'left')   return { x: -1, y: 0 };
+  if (edge === 'right')  return { x:  1, y: 0 };
+  if (edge === 'top')    return { x:  0, y: -1 };
+  if (edge === 'bottom') return { x:  0, y:  1 };
+  return { x: 0, y: 0 };                          // explicit x/y pad: no preferred exit
+}
+
+/**
+ * Connector geometry (mm) for body + pin layout.
+ * Pitch values are stylised where real parts (1.0/1.25 mm) would be too small
+ * to click at schematic scale.
+ */
+function connectorGeom(conn) {
+  conn = conn || {};
+  const n = Math.max(0, conn.pins || 0);
+  switch (conn.type) {
+    case 'xt60_male':      return { kind:'xt',  n, pitch: conn.pitch || 5.5, bw:16, bh:9   };
+    case 'xt30_male':      return { kind:'xt',  n, pitch: conn.pitch || 4.5, bw:12, bh:7   };
+    case 'usb_c_port':     return { kind:'usb', n:0, pitch:0,                bw:9,  bh:3.6 };
+    case 'gh1_25_socket': {
+      const p = conn.pitch || 3.5;
+      return { kind:'gh', n, pitch:p, bw:Math.max(3.5, (n - 1) * p + 2.5), bh:5 };
+    }
+    default: {                                     // jst_sh_socket
+      const p = conn.pitch || 4.0;
+      return { kind:'jst', n, pitch:p, bw:Math.max(3, (n - 1) * p + 2.0), bh:4.5 };
+    }
+  }
+}
+
+/** SVG body markup for a connector, drawn centred on the origin. */
+function connectorShapes(conn) {
+  const g = connectorGeom(conn);
+  const bw = g.bw * SCALE, bh = g.bh * SCALE;
+  const bx = -bw / 2, by = -bh / 2;
+  let s = '';
+
+  if (g.kind === 'xt') {
+    s += `<rect class="conn-body-xt" x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="2"/>`;
+    for (let i = 0; i < g.n; i++) {
+      const dx = (i - (g.n - 1) / 2) * g.pitch * SCALE;
+      s += `<circle class="conn-pin-xt" cx="${dx}" cy="0" r="${Math.min(bw, bh) * 0.28}"/>`;
+    }
+  } else if (g.kind === 'usb') {
+    s += `<rect class="conn-body-usb" x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="1.6"/>`;
+    s += `<rect class="conn-usb-tongue" x="${bx + bw * 0.18}" y="${by + bh * 0.3}" width="${bw * 0.64}" height="${bh * 0.4}" rx="1"/>`;
+    for (let i = 0; i < 4; i++) {
+      const dx = bx + bw * (0.28 + i * 0.15);
+      s += `<circle class="conn-usb-dot" cx="${dx}" cy="0" r="0.9"/>`;
+    }
+  } else {
+    const bodyCls = g.kind === 'gh' ? 'conn-body-gh' : 'conn-body-jst';
+    const keyCls  = g.kind === 'gh' ? 'conn-key-gh'  : 'conn-key-jst';
+    s += `<rect class="${bodyCls}" x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="1.5"/>`;
+    s += `<rect class="${keyCls}" x="-2" y="${by - 2}" width="4" height="2" rx="1"/>`;
+  }
+  return s;
+}
+
+/** Connector body placed on an edge (local px, rotated for side edges). */
+function connectorMarkup(t, edge, item) {
+  const geom = connectorGeom(item.group.conn);
+  const centerAlong = item.start + item.L / 2;
+  const cross = geom.bh / 2 + 0.5;
+  const c = edgeLocal(t, edge, centerAlong, cross);
+  const rot = edge === 'left' ? 90 : edge === 'right' ? -90 : edge === 'bottom' ? 180 : 0;
+  return `<g transform="translate(${c.x * SCALE} ${c.y * SCALE}) rotate(${rot})">`
+       + connectorShapes(item.group.conn) + `</g>`;
+}
+
+/** Local (px) -> world (px): flip about the board centre, then rotate. */
+function localToWorld(comp, local) {
+  const t = getTemplate(comp);
+  const w = t.width * SCALE, h = t.height * SCALE;
+  const cx = w / 2, cy = h / 2;
+  let dx = local.x - cx, dy = local.y - cy;
+  if (comp.flipX) dx = -dx;
+  if (comp.flipY) dy = -dy;
+  const rad = (comp.rotation || 0) * Math.PI / 180;
+  return {
+    x: comp.x + cx + dx * Math.cos(rad) - dy * Math.sin(rad),
+    y: comp.y + cy + dx * Math.sin(rad) + dy * Math.cos(rad)
+  };
+}
+
+/** Rotate (and flip) a local unit direction into world space. */
+function dirToWorld(comp, dir) {
+  let dx = dir.x, dy = dir.y;
+  if (comp.flipX) dx = -dx;
+  if (comp.flipY) dy = -dy;
+  const rad = (comp.rotation || 0) * Math.PI / 180;
+  return {
+    x: dx * Math.cos(rad) - dy * Math.sin(rad),
+    y: dx * Math.sin(rad) + dy * Math.cos(rad)
+  };
+}
+
+/** All magnetic targets of a template: solder pads + connector pins (local px). */
+function componentTargets(t) {
+  const out = [];
+  for (const edge of EDGES) {
+    for (const item of layoutEdge(t, edge)) {
+      const g = item.group;
+      if (g.kind === 'connector') {
+        const geom = connectorGeom(g.conn);
+        const centerAlong = item.start + item.L / 2;
+        const cross = geom.bh / 2 + 0.5;
+        for (let i = 0; i < geom.n; i++) {
+          const along = centerAlong + (i - (geom.n - 1) / 2) * geom.pitch;
+          out.push({
+            id: `${g.conn.id}_p${i}`,
+            label: (g.conn.labels || [])[i] || `PIN${i + 1}`,
+            signal_type: (g.conn.signals || [])[i] || '',
+            kind: 'pin',
+            local: { x: edgeLocal(t, edge, along, cross).x * SCALE,
+                     y: edgeLocal(t, edge, along, cross).y * SCALE },
+            dir: edgeDir(edge)
+          });
+        }
+      } else {
+        g.pads.forEach((p, i) => {
+          if (p.visible === false) return;         // sparse-pad visibility
+          const along = item.start + i * (Number(g.spacing) || 6);
+          const loc = edgeLocal(t, edge, along, PAD_INSET + (g.cross || 0));
+          out.push({
+            id: p.id, label: p.label, signal_type: p.signal_type,
+            kind: 'pad', edge, labelSide: resolveLabelSide(edge, g),
+            local: { x: loc.x * SCALE, y: loc.y * SCALE },
+            dir: edgeDir(edge)
+          });
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/* =================================================================
+   4. COLOUR PIPELINE  (signal type / label -> default wire colour)
+   ================================================================= */
+const WIRE_COLORS = {
+  ground:    '#1E1E1E',   // dark gray / black
+  power:     '#E53935',   // red
+  video:     '#FDD835',   // yellow
+  tx:        '#FFFFFF',   // white
+  rx:        '#4CAF50',   // green
+  telemetry: '#1E88E5',   // blue
+  aux:       '#FB8C00'    // orange
+};
+
+function signalColor(label, signalType) {
+  const s = (signalType || '').toLowerCase();
+  const l = (label || '').toLowerCase();
+  const lTrim = l.replace(/[+\-]/g, '');
+
+  if (s === 'ground' || l === 'gnd' || l === 'ground' || l === '-' || lTrim === 'gnd') return WIRE_COLORS.ground;
+  if (s === 'power_pos' || ['5v','9v','bat','vcc','vbat','+','3v3','12v'].includes(lTrim)) return WIRE_COLORS.power;
+  if (s === 'video' || ['cam','vtx','vo','vi','video'].includes(l)) return WIRE_COLORS.video;
+  if (s === 'uart_tx' || l === 'tx' || /^t\d+$/.test(l)) return WIRE_COLORS.tx;
+  if (s === 'uart_rx' || l === 'rx' || /^r\d+$/.test(l)) return WIRE_COLORS.rx;
+  if (s === 'telemetry' || ['crsf','sa','tlm','telemetry'].includes(l)) return WIRE_COLORS.telemetry;
+  return WIRE_COLORS.aux;
+}
+
+/* =================================================================
+   5. VIEWPORT  (pan / zoom / background)
+   ================================================================= */
+
+/** Screen coordinates relative to the SVG element (== SVG user units). */
+function clientToScreen(e) {
+  const r = svg.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+function screenToWorld(s) {
+  return { x: (s.x - state.pan.x) / state.zoom, y: (s.y - state.pan.y) / state.zoom };
+}
+function worldToScreen(w) {
+  return { x: w.x * state.zoom + state.pan.x, y: w.y * state.zoom + state.pan.y };
+}
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+/** Push pan/zoom into the world group transform. */
+function applyTransform() {
+  world.setAttribute('transform', `translate(${state.pan.x} ${state.pan.y}) scale(${state.zoom})`);
+}
+
+function updateZoomLabel() {
+  zoomLabel.textContent = Math.round(state.zoom * 100) + '%';
+}
+
+/** Zoom by a factor, keeping screen point `s` fixed under the cursor. */
+function zoomAt(s, factor) {
+  const wp = screenToWorld(s);
+  state.zoom = clamp(state.zoom * factor, MIN_ZOOM, MAX_ZOOM);
+  state.pan.x = s.x - wp.x * state.zoom;
+  state.pan.y = s.y - wp.y * state.zoom;
+  applyTransform();
+  updateZoomLabel();
+  scheduleSave();
+}
+
+/** Apply the selected background mode: fill colour, grid colours, CSS bg. */
+function applyBackground() {
+  const modes = {
+    dark_grid:   { bg:'#0f172a', minor:'#1e293b', major:'#334155', grid:true  },
+    light_grid:  { bg:'#f1f5f9', minor:'#e2e8f0', major:'#cbd5e1', grid:true  },
+    blueprint:   { bg:'#0b2a4a', minor:'#16385a', major:'#2f6ea8', grid:true  },
+    clean_white: { bg:'#ffffff', minor:null,      major:null,      grid:false },
+    transparent: { bg:'transparent', grid:false }
+  };
+  const cfg = modes[state.background] || modes.dark_grid;
+
+  bgFill.setAttribute('fill', cfg.bg === 'transparent' ? 'none' : cfg.bg);
+
+  if (cfg.grid) {
+    bgGrid.style.display = '';
+    gridMinorPath.setAttribute('stroke', cfg.minor);
+    gridMajorPath.setAttribute('stroke', cfg.major);
+  } else {
+    bgGrid.style.display = 'none';
+  }
+
+  if (state.background === 'transparent') {
+    svg.classList.add('bg-transparent');
+    svg.style.background = '';
+  } else {
+    svg.classList.remove('bg-transparent');
+    svg.style.background = cfg.bg;
+  }
+
+  document.body.dataset.bg = state.background;
+}
+
+/* =================================================================
+   6. RENDER PIPELINE
+   ================================================================= */
+function esc(str) {
+  return String(str).replace(/[&<>"']/g, m => (
+    { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[m]
+  ));
+}
+const uid = () => 'w' + Math.random().toString(36).slice(2, 9);
+
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => { renderQueued = false; render(); });
+}
+
+function render() {
+  applyBackground();
+  renderComponents();   // also rebuilds state._targets
+  renderWires();
+  renderOverlay();
+  updateZoomLabel();
+}
+
+/* --- 6a. Components (boards, holes, connectors, pads) --- */
+function renderComponents() {
+  let svgOut = '';
+  const targets = [];   // flat magnetic-target list for snapping
+
+  for (const comp of state.components) {
+    const t = getTemplate(comp);
+    if (!t) continue;
+    const w = t.width * SCALE, h = t.height * SCALE;
+    const cx = w / 2, cy = h / 2;
+    const rot = comp.rotation || 0;
+    const sx = comp.flipX ? -1 : 1, sy = comp.flipY ? -1 : 1;
+    const isSel = (selectedId === comp.instance_id);
+
+    // Flip is applied about the centre (before rotation), matching localToWorld.
+    svgOut += `<g class="component${isSel ? ' selected' : ''}" data-id="${comp.instance_id}" `
+            + `transform="translate(${comp.x} ${comp.y}) rotate(${rot} ${cx} ${cy}) `
+            + `translate(${cx} ${cy}) scale(${sx} ${sy}) translate(${-cx} ${-cy})">`;
+
+    // Board body (shadow + fill + inset silkscreen line)
+    svgOut += `<path class="board-shadow" d="${boardPath(w, h, t.corners)}" transform="translate(2 3)"/>`;
+    svgOut += `<path class="board-body" d="${boardPath(w, h, t.corners)}"/>`;
+    svgOut += `<path class="board-inner" d="${boardPath(w - 6, h - 6, t.corners)}" transform="translate(3 3)"/>`;
+
+    // Mounting holes (preset "WxH" span or custom spanX/spanY)
+    const mh = t.mounting_holes;
+    if (mh && mh.pattern && mh.pattern !== 'none') {
+      let spanX, spanY;
+      if (mh.pattern === 'custom') { spanX = mh.spanX || 20; spanY = mh.spanY || 20; }
+      else { const sp = mh.pattern.split('x').map(Number); spanX = sp[0]; spanY = sp[1]; }
+      const ix = (t.width - spanX) / 2, iy = (t.height - spanY) / 2;
+      const r = (mh.diameter || 3) / 2 * SCALE;
+      [[ix, iy], [t.width - ix, iy], [ix, t.height - iy], [t.width - ix, t.height - iy]]
+        .forEach(([mx, my]) => {
+          svgOut += `<circle class="hole-copper" cx="${mx * SCALE}" cy="${my * SCALE}" r="${r + 1.1}"/>`;
+          svgOut += `<circle class="hole-ring" cx="${mx * SCALE}" cy="${my * SCALE}" r="${r}"/>`;
+        });
+    }
+
+    // Connector bodies — one per connector group on each edge
+    for (const edge of EDGES) {
+      for (const item of layoutEdge(t, edge)) {
+        if (item.group.kind === 'connector') svgOut += connectorMarkup(t, edge, item);
+      }
+    }
+
+    // Pads & connector pins (magnetic targets)
+    for (const tgt of componentTargets(t)) {
+      const local = tgt.local;
+      const worldPos = localToWorld(comp, local);
+      targets.push({
+        compId: comp.instance_id, id: tgt.id, label: tgt.label,
+        signal_type: tgt.signal_type, kind: tgt.kind,
+        local, world: worldPos, dir: dirToWorld(comp, tgt.dir)
+      });
+
+      if (tgt.kind === 'pin') {
+        svgOut += `<g class="snap-target" data-comp="${comp.instance_id}" data-target="${tgt.id}">`;
+        svgOut += `<circle class="pin-hit" cx="${local.x}" cy="${local.y}" r="6"/>`;
+        svgOut += `<circle class="pin-copper" cx="${local.x}" cy="${local.y}" r="2.2"/>`;
+        svgOut += `</g>`;
+      } else {
+        // Label offset follows the group's labelSide (per-row / per-column).
+        let lx = local.x, ly = local.y, anchor = 'middle';
+        const side = tgt.labelSide;
+        if (side === 'left')        { lx -= 8; anchor = 'end'; }
+        else if (side === 'right')  { lx += 8; anchor = 'start'; }
+        else if (side === 'bottom') { ly += 12; }
+        else                        { ly -= 8; }   // 'top'
+
+        svgOut += `<g class="snap-target" data-comp="${comp.instance_id}" data-target="${tgt.id}">`;
+        svgOut += `<circle class="pad-hit" cx="${local.x}" cy="${local.y}" r="9"/>`;
+        svgOut += `<rect class="pad-copper" x="${local.x - 3.6}" y="${local.y - 3.6}" width="7.2" height="7.2" rx="1.6"/>`;
+        svgOut += `<circle class="pad-dot" cx="${local.x}" cy="${local.y}" r="1.2"/>`;
+        svgOut += `<text class="pad-label" x="${lx}" y="${ly}" text-anchor="${anchor}">${esc(tgt.label)}</text>`;
+        svgOut += `</g>`;
+      }
+    }
+
+    // Component label below the board
+    svgOut += `<text class="comp-label" x="${w / 2}" y="${h + 14}">${esc(comp.label)}</text>`;
+
+    // Selection outline + corner handles (edit mode only)
+    if (isSel && state.mode === 'edit') {
+      svgOut += `<rect class="sel-box" x="-4" y="-4" width="${w + 8}" height="${h + 8}" rx="3"/>`;
+      [[-4, -4], [w + 4, -4], [-4, h + 4], [w + 4, h + 4]].forEach(([hx, hy]) => {
+        svgOut += `<circle class="sel-handle" cx="${hx}" cy="${hy}" r="3.2"/>`;
+      });
+    }
+    svgOut += `</g>`;
+  }
+
+  layerComponents.innerHTML = svgOut;
+  state._targets = targets;
+}
+
+/* --- 6b. Wire path: exit each pad along its edge normal, then curve --- */
+/**
+ * Builds a path that leaves pad `a` in direction `dirA`, enters pad `b`
+ * opposing `dirB`, and smoothly joins the two stubs with a cubic Bézier.
+ * Either direction may be null (e.g. a free-drawing cursor), in which case
+ * that end falls back to a straight join.
+ */
+function wirePath(a, dirA, b, dirB, route) {
+  return route === 'ortho' ? wirePathOrtho(a, dirA, b, dirB) : wirePathBezier(a, dirA, b, dirB);
+}
+
+function wirePathBezier(a, dirA, b, dirB) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const dist = Math.hypot(dx, dy) || 1;
+
+  const hasA = dirA && (dirA.x || dirA.y);
+  const hasB = dirB && (dirB.x || dirB.y);
+
+  // Stub length grows with separation so short links stay tight.
+  const stub = clamp(dist * 0.3, 14, 48);
+
+  const p1 = hasA ? { x: a.x + dirA.x * stub, y: a.y + dirA.y * stub } : { x: a.x, y: a.y };
+  const p2 = hasB ? { x: b.x + dirB.x * stub, y: b.y + dirB.y * stub } : { x: b.x, y: b.y };
+
+  // Control points continue each exit/entry direction, giving a clean
+  // perpendicular take-off and touchdown.
+  const k = clamp(dist * 0.4, 10, 70);
+  const c1 = hasA ? { x: p1.x + dirA.x * k, y: p1.y + dirA.y * k }
+                   : { x: a.x + dx * 0.5, y: a.y };
+  const c2 = hasB ? { x: p2.x + dirB.x * k, y: p2.y + dirB.y * k }
+                   : { x: b.x - dx * 0.5, y: b.y };
+
+  let d = `M ${a.x} ${a.y}`;
+  if (hasA) d += ` L ${p1.x} ${p1.y}`;
+  d += ` C ${c1.x} ${c1.y} ${c2.x} ${c2.y} ${p2.x} ${p2.y}`;
+  if (hasB) d += ` L ${b.x} ${b.y}`;
+  return d;
+}
+
+/**
+ * Orthogonal (right-angle) route: leave each pad along its edge normal, join
+ * the two stubs with axis-aligned segments, then round the corners slightly.
+ */
+function wirePathOrtho(a, dirA, b, dirB) {
+  const hasA = dirA && (dirA.x || dirA.y);
+  const hasB = dirB && (dirB.x || dirB.y);
+  const stub = 16;
+  const p1 = hasA ? { x: a.x + dirA.x * stub, y: a.y + dirA.y * stub } : { x: a.x, y: a.y };
+  const p2 = hasB ? { x: b.x + dirB.x * stub, y: b.y + dirB.y * stub } : { x: b.x, y: b.y };
+
+  const horizA = hasA && dirA.x !== 0;
+  const horizB = hasB && dirB.x !== 0;
+
+  const pts = [{ x: a.x, y: a.y }];
+  if (hasA) pts.push(p1);
+
+  if (hasA && hasB) {
+    if (horizA && horizB) {
+      const mx = (p1.x + p2.x) / 2;
+      pts.push({ x: mx, y: p1.y }, { x: mx, y: p2.y });
+    } else if (!horizA && !horizB) {
+      const my = (p1.y + p2.y) / 2;
+      pts.push({ x: p1.x, y: my }, { x: p2.x, y: my });
+    } else if (horizA) {
+      pts.push({ x: p2.x, y: p1.y });
+    } else {
+      pts.push({ x: p1.x, y: p2.y });
+    }
+  } else if (hasA) {
+    if (horizA) pts.push({ x: p2.x, y: p1.y }); else pts.push({ x: p1.x, y: p2.y });
+  } else if (hasB) {
+    if (horizB) pts.push({ x: p1.x, y: p2.y }); else pts.push({ x: p2.x, y: p1.y });
+  }
+
+  pts.push(p2);
+  if (hasB) pts.push({ x: b.x, y: b.y });
+  return roundedPolyline(pts, 7);
+}
+
+/** SVG path through `pts` with quadratic-rounded corners of radius `r`. */
+function roundedPolyline(pts, r) {
+  const P = [];
+  for (const p of pts) {
+    const l = P[P.length - 1];
+    if (!l || Math.hypot(p.x - l.x, p.y - l.y) > 0.01) P.push(p);
+  }
+  if (P.length < 2) return '';
+  let d = `M ${P[0].x} ${P[0].y}`;
+  for (let i = 1; i < P.length - 1; i++) {
+    const prev = P[i - 1], p = P[i], next = P[i + 1];
+    const v1 = { x: p.x - prev.x, y: p.y - prev.y };
+    const v2 = { x: next.x - p.x, y: next.y - p.y };
+    const l1 = Math.hypot(v1.x, v1.y) || 1, l2 = Math.hypot(v2.x, v2.y) || 1;
+    const rr = Math.min(r, l1 / 2, l2 / 2);
+    const a1 = { x: p.x - v1.x / l1 * rr, y: p.y - v1.y / l1 * rr };
+    const a2 = { x: p.x + v2.x / l2 * rr, y: p.y + v2.y / l2 * rr };
+    d += ` L ${a1.x} ${a1.y} Q ${p.x} ${p.y} ${a2.x} ${a2.y}`;
+  }
+  const last = P[P.length - 1];
+  return d + ` L ${last.x} ${last.y}`;
+}
+
+/** Look up a live magnetic target by component + id. */
+function findTarget(compId, targetId) {
+  return (state._targets || []).find(x => x.compId === compId && x.id === targetId) || null;
+}
+
+/* --- 6c. Committed wires --- */
+/** Default wire gauge (AWG) from the source pad's signal type. */
+function defaultGauge(signalType) {
+  const s = (signalType || '').toLowerCase();
+  return (s === 'ground' || s === 'power_pos') ? 18 : 26;
+}
+
+/** A contrasting tint of a wire colour, for two-tone "striped" styling. */
+function wireTint(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return '#ffffff';
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  const c = lum > 0.6
+    ? { r: r * 0.32, g: g * 0.32, b: b * 0.32 }                          // light -> darker
+    : { r: r + (255 - r) * 0.6, g: g + (255 - g) * 0.6, b: b + (255 - b) * 0.6 };  // dark -> lighter
+  const h = v => Math.round(v).toString(16).padStart(2, '0');
+  return `#${h(c.r)}${h(c.g)}${h(c.b)}`;
+}
+
+function renderWires() {
+  let out = '';
+  for (const wire of state.wires) {
+    const a = findTarget(wire.from.comp, wire.from.target);
+    const b = findTarget(wire.to.comp, wire.to.target);
+    if (!a || !b) continue;
+
+    const d = wirePath(a.world, a.dir, b.world, b.dir, wire.route || 'bezier');
+    const w = gaugeWidth(wire.gauge || 24);
+    const sel = (wire.id === selectedWireId) ? ' sel' : '';
+    const pattern = wire.pattern || 'solid';
+    const dash = (pattern === 'dashed')
+      ? `stroke-dasharray:${(w * 2.6).toFixed(1)} ${(w * 1.9).toFixed(1)};`
+      : '';
+
+    out += `<path class="wire-casing${sel}" style="stroke-width:${(w + 3).toFixed(1)}px;${dash}" d="${d}"/>`;
+    out += `<path class="wire${sel}" style="stroke-width:${w.toFixed(1)}px;${dash}" d="${d}" stroke="${wire.color}"/>`;
+    if (pattern === 'striped') {
+      const sw = Math.max(1, w * 0.34);
+      out += `<path class="wire-stripe" style="stroke-width:${sw.toFixed(2)}px;`
+           + `stroke-dasharray:${(w * 1.4).toFixed(1)} ${(w * 1.1).toFixed(1)}" `
+           + `d="${d}" stroke="${wireTint(wire.color)}"/>`;
+    }
+    out += `<path class="wire-hit${sel}" data-wire="${wire.id}" d="${d}"/>`;
+  }
+  layerWires.innerHTML = out;
+}
+
+/* --- 6d. In-progress wire + snap halo --- */
+function renderOverlay() {
+  let out = '';
+  if (interaction && interaction.type === 'wire') {
+    const a = interaction.from;                               // live target object
+    const bWorld = interaction.snap ? interaction.snap.world : interaction.cursor;
+    const bDir = interaction.snap ? interaction.snap.dir : null;
+    if (a) {
+      const d = wirePath(a.world, a.dir, bWorld, bDir);
+      const color = signalColor(a.label, a.signal_type);
+      out += `<path class="wire-casing" d="${d}"/>`;
+      out += `<path class="wire wire-temp" d="${d}" stroke="${color}"/>`;
+    }
+    if (interaction.snap) {
+      const w = interaction.snap.world;
+      out += `<circle class="snap-halo" cx="${w.x}" cy="${w.y}" r="11"/>`;
+    }
+  }
+  layerOverlay.innerHTML = out;
+}
+
+/* =================================================================
+   7. SNAPPING
+   ================================================================= */
+
+/** Grid snap (mm step) for component body positioning. */
+function snapToGrid(v) {
+  if (!state.gridSnap) return v;                 // snap disabled
+  const step = state.gridSnap * SCALE;
+  return Math.round(v / step) * step;
+}
+
+/**
+ * Highest-priority magnetic snap: returns the nearest target whose screen
+ * distance is within SNAP_RADIUS_PX, otherwise null. This overrides grid snap
+ * while drawing wires.
+ */
+function findNearestTarget(worldPt) {
+  let best = null, bestScreenDist = SNAP_RADIUS_PX;
+  for (const t of (state._targets || [])) {
+    const dWorld = Math.hypot(t.world.x - worldPt.x, t.world.y - worldPt.y);
+    const dScreen = dWorld * state.zoom;         // convert world distance -> screen px
+    if (dScreen < bestScreenDist) { bestScreenDist = dScreen; best = t; }
+  }
+  return best;
+}
+
+/* =================================================================
+   8. INPUT HANDLING
+   ================================================================= */
+function onPointerDown(e) {
+  if (interaction) return;
+  const screen = clientToScreen(e);
+
+  // Pan: middle mouse button, or Space + left button.
+  if (e.button === 1 || (spaceDown && e.button === 0)) {
+    interaction = { type: 'pan', startScreen: screen, startPan: { ...state.pan } };
+    document.body.classList.add('is-panning');
+    svg.setPointerCapture(e.pointerId);
+    e.preventDefault();
+    return;
+  }
+
+  if (state.mode !== 'edit' || e.button !== 0) return;
+
+  // Start a wire from a pad / connector pin.
+  const padEl = e.target.closest && e.target.closest('.snap-target');
+  if (padEl) {
+    const from = (state._targets || []).find(
+      t => t.compId === padEl.dataset.comp && t.id === padEl.dataset.target
+    );
+    if (from) {
+      interaction = { type: 'wire', from, cursor: screenToWorld(e), snap: null };
+      svg.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      renderOverlay();
+    }
+    return;
+  }
+
+  // Select a wire (thin wires carry a wide invisible hit band).
+  const wireEl = e.target.closest && e.target.closest('[data-wire]');
+  if (wireEl) {
+    selectedWireId = wireEl.dataset.wire;
+    selectedId = null;
+    renderPanel();
+    render();
+    e.preventDefault();
+    return;
+  }
+
+  // Select + drag a component body.
+  const compEl = e.target.closest && e.target.closest('.component');
+  if (compEl) {
+    const comp = state.components.find(c => c.instance_id === compEl.dataset.id);
+    if (comp) {
+      if (selectedId !== comp.instance_id || selectedWireId) {
+        selectedId = comp.instance_id;
+        selectedWireId = null;
+        renderPanel();
+        render();                      // redraw with selection highlight
+      }
+      const wp = screenToWorld(e);
+      interaction = { type: 'drag', comp, offset: { x: wp.x - comp.x, y: wp.y - comp.y } };
+      svg.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    }
+    return;
+  }
+
+  // Clicking empty canvas clears the current selection.
+  if (selectedId || selectedWireId) {
+    selectedId = null;
+    selectedWireId = null;
+    renderPanel();
+    render();
+  }
+}
+
+function onPointerMove(e) {
+  if (!interaction) {
+    updateHover(e);
+    return;
+  }
+  const screen = clientToScreen(e);
+
+  if (interaction.type === 'pan') {
+    state.pan.x = interaction.startPan.x + (screen.x - interaction.startScreen.x);
+    state.pan.y = interaction.startPan.y + (screen.y - interaction.startScreen.y);
+    applyTransform();
+
+  } else if (interaction.type === 'drag') {
+    const wp = screenToWorld(e);
+    let nx = wp.x - interaction.offset.x;
+    let ny = wp.y - interaction.offset.y;
+    nx = snapToGrid(nx);
+    ny = snapToGrid(ny);
+    interaction.comp.x = nx;
+    interaction.comp.y = ny;
+    scheduleRender();
+
+  } else if (interaction.type === 'wire') {
+    const wp = screenToWorld(e);
+    interaction.cursor = wp;
+    interaction.snap = findNearestTarget(wp);
+    renderOverlay();
+  }
+}
+
+function onPointerUp(e) {
+  if (!interaction) return;
+
+  if (interaction.type === 'wire') {
+    const { from, snap } = interaction;
+    if (snap && !(snap.compId === from.compId && snap.id === from.id)) {
+      // Commit wire; auto-colour & gauge from the source pad's signal type.
+      state.wires.push({
+        id: uid(),
+        from: { comp: from.compId, target: from.id },
+        to:   { comp: snap.compId, target: snap.id },
+        color: signalColor(from.label, from.signal_type),
+        gauge: defaultGauge(from.signal_type),
+        pattern: 'solid',
+        route: 'bezier'
+      });
+      scheduleSave();
+    }
+  } else if (interaction.type === 'drag' || interaction.type === 'pan') {
+    scheduleSave();
+  }
+
+  if (interaction.type === 'pan') document.body.classList.remove('is-panning');
+  interaction = null;
+  render();
+}
+
+function updateHover(e) {
+  if (state.mode !== 'edit') { hoverInfo.textContent = ''; return; }
+  const wp = screenToWorld(clientToScreen(e));
+  const t = findNearestTarget(wp);
+  hoverInfo.textContent = t ? `Snap: ${t.label} (${t.kind})` : '';
+}
+
+function onWheel(e) {
+  e.preventDefault();
+  zoomAt(clientToScreen(e), e.deltaY < 0 ? 1.1 : 1 / 1.1);
+}
+
+/* Spacebar pan modifier */
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space' && !e.repeat) {
+    const tag = (document.activeElement && document.activeElement.tagName) || '';
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'BUTTON') return;
+    spaceDown = true;
+    e.preventDefault();
+  }
+});
+window.addEventListener('keyup', e => {
+  if (e.code === 'Space') spaceDown = false;
+});
+
+/* =================================================================
+   9. TOOLBAR WIRING
+   ================================================================= */
+document.getElementById('modeSwitch').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-mode]');
+  if (!btn) return;
+  setMode(btn.dataset.mode);
+});
+
+function setMode(mode) {
+  state.mode = mode;
+  document.body.dataset.mode = mode;
+  document.querySelectorAll('#modeSwitch button').forEach(b =>
+    b.classList.toggle('active', b.dataset.mode === mode)
+  );
+  renderPanel();
+  scheduleSave();
+  render();
+}
+
+document.getElementById('bgSelect').addEventListener('change', e => {
+  state.background = e.target.value;
+  applyBackground();
+  scheduleSave();
+});
+
+document.getElementById('snapSelect').addEventListener('change', e => {
+  state.gridSnap = Number(e.target.value);
+  scheduleSave();
+});
+
+document.getElementById('zoomIn').addEventListener('click', () =>
+  zoomAt({ x: svg.clientWidth / 2, y: svg.clientHeight / 2 }, 1.2));
+document.getElementById('zoomOut').addEventListener('click', () =>
+  zoomAt({ x: svg.clientWidth / 2, y: svg.clientHeight / 2 }, 1 / 1.2));
+document.getElementById('zoomReset').addEventListener('click', () => {
+  state.zoom = 1;
+  state.pan = { x: 20, y: 20 };
+  applyTransform(); updateZoomLabel(); scheduleSave();
+});
+
+document.getElementById('resetSetup').addEventListener('click', () => {
+  if (!confirm('Reset to the built-in test components and wiring?')) return;
+  seedState();
+  selectedId = null;
+  persist();
+  syncUI();
+  renderPanel();
+  render();
+});
+
+/* Place a new instance of the selected library template at the view centre. */
+document.getElementById('addComp').addEventListener('click', () => {
+  const id = libSelect.value;
+  const t = TEMPLATES[id];
+  if (!t) return;
+  const c = screenToWorld({ x: svg.clientWidth / 2, y: svg.clientHeight / 2 });
+  const comp = instantiate(id, t.name, snapToGrid(c.x), snapToGrid(c.y));
+  state.components.push(comp);
+  selectedId = comp.instance_id;
+  renderPanel();
+  render();
+  scheduleSave();
+});
+
+/* =================================================================
+   10. TEST FIXTURE + PERSISTENCE
+   ================================================================= */
+
+/** Create a placed component with its own editable template copy. */
+function instantiate(templateId, label, x, y, instanceId) {
+  return {
+    instance_id: instanceId || uid(),
+    template_id: templateId,
+    label: label,
+    x: x, y: y,
+    rotation: 0,
+    flipX: false, flipY: false,
+    template: clone(TEMPLATES[templateId])
+  };
+}
+
+/** Built-in test setup: the full stack, with FC <-> ELRS pre-wired. */
+function seedState() {
+  state = {
+    mode: 'edit',
+    background: 'dark_grid',
+    gridSnap: 5,
+    zoom: 1,
+    pan: { x: 20, y: 20 },
+    components: [
+      instantiate('fc',     'Flight Controller', 330,  90, 'fc_1'),
+      instantiate('elrs',   'ELRS Receiver',      60, 120, 'elrs_1'),
+      instantiate('esc',    '4-in-1 ESC',        330, 360, 'esc_1'),
+      instantiate('vtx',    'Analog VTX',         60, 330, 'vtx_1'),
+      instantiate('camera', 'Analog Camera',      60, 560, 'cam_1')
+    ],
+    wires: [
+      { id: uid(), from: { comp:'fc_1', target:'fc_5v1' }, to: { comp:'elrs_1', target:'rx_5v'  }, color: WIRE_COLORS.power  },
+      { id: uid(), from: { comp:'fc_1', target:'fc_g1'  }, to: { comp:'elrs_1', target:'rx_gnd' }, color: WIRE_COLORS.ground },
+      { id: uid(), from: { comp:'fc_1', target:'fc_t2'  }, to: { comp:'elrs_1', target:'rx_rx'  }, color: WIRE_COLORS.tx     },
+      { id: uid(), from: { comp:'fc_1', target:'fc_r2'  }, to: { comp:'elrs_1', target:'rx_tx'  }, color: WIRE_COLORS.rx     }
+    ],
+    _targets: []
+  };
+}
+
+/** Serializable slice of state (targets are derived, never stored). */
+function serializableState() {
+  return {
+    mode: state.mode,
+    background: state.background,
+    gridSnap: state.gridSnap,
+    zoom: state.zoom,
+    pan: state.pan,
+    components: state.components,
+    wires: state.wires
+  };
+}
+
+let saveTimer = null;
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(persist, 300);
+}
+function persist() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState())); }
+  catch (err) { /* storage may be unavailable (private mode) — ignore */ }
+}
+function loadState() {
+  let loaded = null;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) loaded = JSON.parse(raw);
+  } catch (err) { loaded = null; }
+
+  if (loaded && Array.isArray(loaded.components)) {
+    state = loaded;
+    state._targets = [];
+    state.gridSnap = (state.gridSnap === undefined) ? 5 : state.gridSnap;
+    // Migrate older saves that referenced shared templates by id only.
+    state.components.forEach(c => {
+      if (!c.template) c.template = clone(TEMPLATES[c.template_id] || TEMPLATES.fc);
+      migrateTemplate(c.template);
+      c.rotation = c.rotation || 0;
+      c.flipX = !!c.flipX;
+      c.flipY = !!c.flipY;
+    });
+    // Backfill wire appearance attributes for older saves.
+    state.wires = (state.wires || []).map(w => ({
+      ...w,
+      id: w.id || uid(),
+      color: w.color || WIRE_COLORS.aux,
+      gauge: w.gauge || 24,
+      pattern: w.pattern || 'solid',
+      route: w.route || 'bezier'
+    }));
+  } else {
+    seedState();
+  }
+  selectedId = null;
+  selectedWireId = null;
+}
+
+/** Reflect loaded state back into the toolbar controls. */
+function syncUI() {
+  document.body.dataset.mode = state.mode;
+  document.querySelectorAll('#modeSwitch button').forEach(b =>
+    b.classList.toggle('active', b.dataset.mode === state.mode)
+  );
+  document.getElementById('bgSelect').value = state.background;
+  document.getElementById('snapSelect').value = String(state.gridSnap);
+}
+
+/* =================================================================
+   11. COMPONENT PROPERTIES PANEL
+   ================================================================= */
+const CORNER_KEYS = ['top_left', 'top_right', 'bottom_left', 'bottom_right'];
+const CORNER_LABELS = { top_left:'Top Left', top_right:'Top Right', bottom_left:'Bottom Left', bottom_right:'Bottom Right' };
+const GROUP_ALIGN_OPTS = [['left','Left'], ['center','Center'], ['right','Right']];
+const LABEL_SIDES_H = [['top','Top'], ['bottom','Bottom']];     // top/bottom edges
+const LABEL_SIDES_V = [['left','Left'], ['right','Right']];      // left/right edges
+const SIGNAL_OPTS = [
+  ['ground','GND'], ['power_pos','PWR'], ['video','VID'],
+  ['uart_tx','TX'], ['uart_rx','RX'], ['telemetry','TLM'], ['aux','AUX']
+];
+const HOLE_PATTERNS = ['none', '12x12', '16x16', '20x20', '25.5x25.5', '30.5x30.5', 'custom'];
+const CONN_NAMES = { jst_sh_socket:'JST-SH', gh1_25_socket:'GH1.25', xt60_male:'XT60', xt30_male:'XT30', usb_c_port:'USB-C' };
+const CONN_TYPES = Object.keys(CONN_NAMES);
+
+function selectedComponent() { return state.components.find(c => c.instance_id === selectedId) || null; }
+function selectedWire() { return selectedWireId ? (state.wires.find(w => w.id === selectedWireId) || null) : null; }
+function compLabel(id) { const c = state.components.find(c => c.instance_id === id); return c ? c.label : id; }
+function num(v, fallback) { const n = parseFloat(v); return isNaN(n) ? fallback : n; }
+function option(value, label, current) {
+  const on = String(value) === String(current) ? ' selected' : '';
+  return `<option value="${value}"${on}>${label}</option>`;
+}
+
+/* ---- Edge / group editor markup ---- */
+function alignSelect(group) {
+  return `<select data-group-align="${group.id}" title="Anchor on edge">`
+    + GROUP_ALIGN_OPTS.map(([v, l]) => option(v, l, group.align || 'center')).join('')
+    + `</select>`;
+}
+
+function padRowHTML(p, edge, groupId) {
+  return `<div class="pad-item" draggable="true" data-pad="${p.id}" data-group="${groupId}" data-edge="${edge}">
+    <div class="pad-line">
+      <span class="pad-grip" title="Drag to reorder">&#8942;</span>
+      <input type="checkbox" data-pad-vis="${p.id}" ${p.visible === false ? '' : 'checked'} title="Visible / active">
+      <input type="text" data-pad="${p.id}" data-prop="label" value="${esc(p.label)}" title="Pad label">
+      <select class="grow" data-pad="${p.id}" data-prop="signal_type" title="Signal type">
+        ${SIGNAL_OPTS.map(([v, l]) => option(v, l, p.signal_type)).join('')}
+      </select>
+      <button class="pad-del" data-action="del-pad" data-pad="${p.id}" title="Delete pad">&times;</button>
+    </div>
+  </div>`;
+}
+
+function groupCardHTML(t, edge, item) {
+  const g = item.group;
+  if (g.kind === 'connector') {
+    const geom = connectorGeom(g.conn);
+    return `<div class="grp-card" draggable="true" data-group="${g.id}" data-edge="${edge}">
+      <div class="grp-head">
+        <span class="grp-grip" title="Drag to reorder">&#8942;</span>
+        <span class="grp-kind">${CONN_NAMES[g.conn.type] || g.conn.type}</span>
+        ${alignSelect(g)}
+        <button class="pad-del" data-action="del-group" data-group="${g.id}" title="Delete group">&times;</button>
+      </div>
+      <div class="pad-line">
+        <span class="pad-tag">Type</span>
+        <select class="grow" data-group-conn-type="${g.id}">
+          ${CONN_TYPES.map(tp => option(tp, CONN_NAMES[tp], g.conn.type)).join('')}
+        </select>
+        <span class="pad-tag">Pins</span>
+        <input class="pos-in" type="number" min="0" step="1" data-group-conn-pins="${g.id}"
+               value="${geom.n || 0}" title="Pin count">
+      </div>
+    </div>`;
+  }
+
+  const padsHTML = (g.pads || []).map(p => padRowHTML(p, edge, g.id)).join('')
+    || '<p class="pp-hint">No pads &mdash; drag one here.</p>';
+  const sides = (edge === 'top' || edge === 'bottom') ? LABEL_SIDES_H : LABEL_SIDES_V;
+  const labelCur = resolveLabelSide(edge, g);
+  return `<div class="grp-card" draggable="true" data-group="${g.id}" data-edge="${edge}">
+    <div class="grp-head">
+      <span class="grp-grip" title="Drag to reorder">&#8942;</span>
+      <span class="grp-kind">${g.name ? esc(g.name) : 'Pads'} &middot; ${(g.pads || []).length}</span>
+      ${alignSelect(g)}
+      <button class="pad-del" data-action="del-group" data-group="${g.id}" title="Delete group">&times;</button>
+    </div>
+    <div class="pad-line">
+      <span class="pad-tag">Gap</span>
+      <input class="pos-in" type="number" min="1" step="0.5" data-group-spacing="${g.id}"
+             value="${g.spacing != null ? g.spacing : 6}" title="Pad spacing (mm)">
+      <span class="pad-tag">Labels</span>
+      <select class="grow" data-group-label="${g.id}" title="Which side the labels sit on">
+        ${sides.map(([v, l]) => option(v, l, labelCur)).join('')}
+      </select>
+    </div>
+    <div class="pad-line">
+      <button data-action="add-pad" data-group="${g.id}">+ Pad</button>
+    </div>
+    <div class="grp-pads" data-group-drop="${g.id}">${padsHTML}</div>
+  </div>`;
+}
+
+function edgeSectionHTML(t, edge) {
+  const items = layoutEdge(t, edge);
+  return `<div class="edge-sec">
+    <div class="edge-title">${edge}</div>
+    <div class="grp-list" data-edge="${edge}">
+      ${items.map(it => groupCardHTML(t, edge, it)).join('') || '<p class="pp-hint">Empty.</p>'}
+    </div>
+    <div class="pp-btnrow">
+      <button data-action="add-group" data-edge="${edge}" data-kind="pads">+ Pads</button>
+      <button data-action="add-group" data-edge="${edge}" data-kind="connector">+ Connector</button>
+    </div>
+  </div>`;
+}
+
+/** Find a group by id across all edges. */
+function findGroupId(t, id) {
+  for (const edge of EDGES) {
+    const list = (t.edges && t.edges[edge]) || [];
+    const idx = list.findIndex(g => g.id === id);
+    if (idx >= 0) return { edge, list, idx, group: list[idx] };
+  }
+  return null;
+}
+
+/** Find a pad by id, plus its containing group. */
+function findPadAnywhere(t, id) {
+  for (const edge of EDGES) {
+    for (const g of ((t.edges && t.edges[edge]) || [])) {
+      if (g.kind !== 'pads') continue;
+      const idx = (g.pads || []).findIndex(p => p.id === id);
+      if (idx >= 0) return { edge, group: g, idx, pad: g.pads[idx] };
+    }
+  }
+  return null;
+}
+
+/** Build (or hide) the properties panel for the current selection. */
+function renderPanel() {
+  if (state.mode !== 'edit') { panel.classList.remove('open'); panel.innerHTML = ''; return; }
+  const wire = selectedWire();
+  if (wire) { renderWirePanel(wire); return; }
+  const comp = selectedComponent();
+  if (!comp) { panel.classList.remove('open'); panel.innerHTML = ''; return; }
+  const t = getTemplate(comp);
+  const mh = t.mounting_holes || (t.mounting_holes = { pattern:'none', diameter:3 });
+
+  const cornersHTML = CORNER_KEYS.map(k => {
+    const c = t.corners[k] || (t.corners[k] = { type:'square', size:0 });
+    return `<div class="pp-corner">
+      <span>${CORNER_LABELS[k]}</span>
+      <select data-corner="${k}" data-prop="type">
+        ${option('square','Square',c.type)}${option('round','Round',c.type)}${option('chamfer','Chamfer',c.type)}
+      </select>
+      <input type="number" min="0" step="0.5" data-corner="${k}" data-prop="size" value="${c.size || 0}" title="Size (mm)">
+    </div>`;
+  }).join('');
+
+  const customHoles = mh.pattern === 'custom'
+    ? `<div class="pp-grid2">
+         <input type="number" min="1" step="0.5" data-hole="spanX" value="${mh.spanX || 20}" title="Span X (mm)">
+         <input type="number" min="1" step="0.5" data-hole="spanY" value="${mh.spanY || 20}" title="Span Y (mm)">
+       </div>` : '';
+
+  const edgesHTML = EDGES.map(edge => edgeSectionHTML(t, edge)).join('');
+
+  panel.innerHTML = `
+    <div class="pp-head">
+      <h2>${esc(comp.label)}</h2>
+      <button class="pp-close" data-action="close" title="Deselect">&times;</button>
+    </div>
+
+    <div class="pp-section">
+      <h3>Transform</h3>
+      <div class="pp-row"><label>Label</label><input type="text" data-field="label" value="${esc(comp.label)}"></div>
+      <div class="pp-grid2">
+        <div class="pp-row"><label>X (mm)</label><input type="number" step="0.5" data-field="x" value="${(comp.x / SCALE).toFixed(1)}"></div>
+        <div class="pp-row"><label>Y (mm)</label><input type="number" step="0.5" data-field="y" value="${(comp.y / SCALE).toFixed(1)}"></div>
+      </div>
+      <div class="pp-row"><label>Rotation</label><input type="number" step="1" data-field="rotation" value="${comp.rotation || 0}"></div>
+      <div class="pp-btnrow">
+        <button data-action="rot-90">-90&deg;</button>
+        <button data-action="rot90">+90&deg;</button>
+        <button data-action="flipx" class="${comp.flipX ? 'on' : ''}">Flip H</button>
+        <button data-action="flipy" class="${comp.flipY ? 'on' : ''}">Flip V</button>
+      </div>
+    </div>
+
+    <div class="pp-section">
+      <h3>Board</h3>
+      <div class="pp-grid2">
+        <div class="pp-row"><label>W (mm)</label><input type="number" min="4" step="0.5" data-field="w" value="${t.width}"></div>
+        <div class="pp-row"><label>H (mm)</label><input type="number" min="4" step="0.5" data-field="h" value="${t.height}"></div>
+      </div>
+    </div>
+
+    <div class="pp-section"><h3>Corners</h3>${cornersHTML}</div>
+
+    <div class="pp-section"><h3>Mounting Holes</h3>
+      <div class="pp-row"><label>Pattern</label>
+        <select data-hole="pattern">${HOLE_PATTERNS.map(p => option(p, p === 'none' ? 'None' : p, mh.pattern)).join('')}</select>
+      </div>
+      <div class="pp-row"><label>&#8960; (mm)</label><input type="number" min="0" step="0.1" data-hole="diameter" value="${mh.diameter || 3}"></div>
+      ${customHoles}
+    </div>
+
+    <div class="pp-section"><h3>Pads &amp; Connectors</h3>
+      <p class="pp-hint">Each edge lists groups top-to-bottom. Drag &#8942; to reorder or move a group/pad to another edge. Anchor = Left / Center / Right.</p>
+      ${edgesHTML}
+    </div>
+
+    <div class="pp-section">
+      <div class="pp-btnrow">
+        <button class="pp-danger" data-action="del-comp">Delete Component</button>
+      </div>
+    </div>`;
+
+  positionPanel();
+  panel.classList.add('open');
+}
+
+/** Properties panel for a selected wire. */
+function renderWirePanel(wire) {
+  const a = findTarget(wire.from.comp, wire.from.target);
+  const b = findTarget(wire.to.comp, wire.to.target);
+  const end = t => t ? `${compLabel(t.compId)} · ${t.label || t.id}` : '?';
+
+  panel.innerHTML = `
+    <div class="pp-head">
+      <h2>Wire</h2>
+      <button class="pp-close" data-action="close" title="Deselect">&times;</button>
+    </div>
+
+    <div class="pp-section">
+      <h3>Connection</h3>
+      <p class="pp-hint">${esc(end(a))} &rarr; ${esc(end(b))}</p>
+    </div>
+
+    <div class="pp-section">
+      <h3>Appearance</h3>
+      <div class="pp-row"><label>Color</label>
+        <input type="color" data-wire-prop="color" value="${wire.color || WIRE_COLORS.aux}">
+      </div>
+      <div class="pp-row"><label>Gauge</label>
+        <select data-wire-prop="gauge">
+          ${GAUGE_OPTS.map(g => option(g, g + ' AWG', wire.gauge || 24)).join('')}
+        </select>
+      </div>
+      <div class="pp-row"><label>Style</label>
+        <select data-wire-prop="pattern">
+          ${option('solid',   'Solid',   wire.pattern || 'solid')}
+          ${option('dashed',  'Dashed',  wire.pattern || 'solid')}
+          ${option('striped', 'Striped', wire.pattern || 'solid')}
+        </select>
+      </div>
+      <div class="pp-row"><label>Route</label>
+        <select data-wire-prop="route">
+          ${option('bezier', 'Curved',      wire.route || 'bezier')}
+          ${option('ortho',  'Right-angle', wire.route || 'bezier')}
+        </select>
+      </div>
+    </div>
+
+    <div class="pp-section">
+      <div class="pp-btnrow"><button class="pp-danger" data-action="del-wire">Delete Wire</button></div>
+    </div>`;
+
+  positionPanel();
+  panel.classList.add('open');
+}
+
+/** Apply a scalar transform/board field (values not rebuilt into the panel). */
+function applyCompField(comp, t, field, value) {
+  switch (field) {
+    case 'label':    comp.label = value; break;
+    case 'x':        comp.x = num(value, comp.x / SCALE) * SCALE; break;
+    case 'y':        comp.y = num(value, comp.y / SCALE) * SCALE; break;
+    case 'rotation': comp.rotation = num(value, comp.rotation || 0); break;
+    /* Board size only changes the outline: pad/connector positions are derived
+       from the edge layout, so they reflow automatically. */
+    case 'w': t.width  = Math.max(4, num(value, t.width));  break;
+    case 'h': t.height = Math.max(4, num(value, t.height)); break;
+  }
+}
+
+/** Button actions for a selected wire. */
+function doWireAction(action, wire) {
+  if (action === 'close') { selectedWireId = null; renderPanel(); render(); return; }
+  if (action === 'del-wire') {
+    state.wires = state.wires.filter(w => w.id !== wire.id);
+    selectedWireId = null;
+    renderPanel(); render(); scheduleSave(); return;
+  }
+}
+
+/** Remove any wires attached to one of a component's target ids. */
+function dropWiresForTargets(compId, targetIds) {
+  const set = new Set(targetIds);
+  state.wires = state.wires.filter(w =>
+    !(w.from.comp === compId && set.has(w.from.target)) &&
+    !(w.to.comp   === compId && set.has(w.to.target)));
+}
+
+/** Button actions from the panel. */
+function doPanelAction(actionEl, comp, t) {
+  const action = actionEl.dataset.action;
+  switch (action) {
+    case 'close':  selectedId = null; renderPanel(); render(); return;
+    case 'rot-90': comp.rotation = (comp.rotation || 0) - 90; break;
+    case 'rot90':  comp.rotation = (comp.rotation || 0) + 90; break;
+    case 'flipx':  comp.flipX = !comp.flipX; break;
+    case 'flipy':  comp.flipY = !comp.flipY; break;
+
+    case 'add-group': {
+      t.edges = t.edges || {};
+      const edge = actionEl.dataset.edge;
+      const list = t.edges[edge] || (t.edges[edge] = []);
+      if (actionEl.dataset.kind === 'connector') {
+        list.push(connGroup('g' + uid(), 'center',
+          { id: 'c' + uid(), type: 'jst_sh_socket', pins: 4, pitch: 4 }));
+      } else {
+        list.push(padsGroup('g' + uid(), 'center', 5, [
+          { id: 'p' + uid(), label: 'NEW', signal_type: 'aux', visible: true } ]));
+      }
+      renderPanel(); render(); scheduleSave(); return;
+    }
+
+    case 'del-group': {
+      const hit = findGroupId(t, actionEl.dataset.group);
+      if (hit) {
+        const ids = [];
+        const g = hit.group;
+        if (g.kind === 'connector') {
+          const n = connectorGeom(g.conn).n || 0;
+          for (let i = 0; i < n; i++) ids.push(`${g.conn.id}_p${i}`);
         } else {
-            document.documentElement.classList.remove('dark');
-            themeIcon.classList.replace('fa-moon', 'fa-sun');
+          g.pads.forEach(p => ids.push(p.id));
         }
+        dropWiresForTargets(comp.instance_id, ids);
+        hit.list.splice(hit.idx, 1);
+      }
+      renderPanel(); render(); scheduleSave(); return;
+    }
 
-        themeToggleBtn.addEventListener('click', () => {
-            const isDark = document.documentElement.classList.toggle('dark');
-            if (isDark) {
-                themeIcon.classList.replace('fa-sun', 'fa-moon');
-                localStorage.setItem('gh_demo_theme', 'dark');
-            } else {
-                themeIcon.classList.replace('fa-moon', 'fa-sun');
-                localStorage.setItem('gh_demo_theme', 'light');
-            }
-        });
+    case 'add-pad': {
+      const hit = findGroupId(t, actionEl.dataset.group);
+      if (hit && hit.group.kind === 'pads') {
+        hit.group.pads.push({ id: 'p' + uid(), label: 'NEW', signal_type: 'aux', visible: true });
+      }
+      renderPanel(); render(); scheduleSave(); return;
+    }
 
-        // --- 2. Live Clock & Date ---
-        function updateClock() {
-            const now = new Date();
-            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            const dateString = now.toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-            
-            document.getElementById('clock').textContent = timeString;
-            document.getElementById('date').textContent = dateString;
-        }
-        setInterval(updateClock, 1000);
-        updateClock();
+    case 'del-pad': {
+      const hit = findPadAnywhere(t, actionEl.dataset.pad);
+      if (hit) {
+        dropWiresForTargets(comp.instance_id, [hit.pad.id]);
+        hit.group.pads.splice(hit.idx, 1);
+      }
+      renderPanel(); render(); scheduleSave(); return;
+    }
 
-        // --- 3. Interactive Counter ---
-        let count = parseInt(localStorage.getItem('gh_demo_counter') || '0');
-        const counterVal = document.getElementById('counterValue');
-        
-        function updateCounterDisplay() {
-            counterVal.textContent = count;
-            localStorage.setItem('gh_demo_counter', count.toString());
-        }
-        updateCounterDisplay();
+    case 'del-comp':
+      state.components = state.components.filter(c => c.instance_id !== comp.instance_id);
+      state.wires = state.wires.filter(w =>
+        w.from.comp !== comp.instance_id && w.to.comp !== comp.instance_id);
+      selectedId = null; renderPanel(); render(); scheduleSave(); return;
+  }
+  renderPanel(); render(); scheduleSave();
+}
 
-        document.getElementById('incrementBtn').addEventListener('click', () => { count++; updateCounterDisplay(); });
-        document.getElementById('decrementBtn').addEventListener('click', () => { count--; updateCounterDisplay(); });
-        document.getElementById('resetBtn').addEventListener('click', () => { count = 0; updateCounterDisplay(); });
+/** Central panel event handler (input / change / click). */
+function handlePanel(e) {
+  const wire = selectedWire();
+  if (wire) {
+    const actionEl = e.target.closest('[data-action]');
+    if (actionEl) { doWireAction(actionEl.dataset.action, wire); return; }
+    const wp = e.target.closest('[data-wire-prop]');
+    if (wp) {
+      const p = wp.dataset.wireProp;
+      wire[p] = (p === 'gauge') ? num(wp.value, wire.gauge || 24) : wp.value;
+      render(); scheduleSave();
+    }
+    return;
+  }
 
-        // --- 4. Task Manager Logic ---
-        const taskForm = document.getElementById('taskForm');
-        const taskInput = document.getElementById('taskInput');
-        const taskList = document.getElementById('taskList');
-        const emptyState = document.getElementById('emptyState');
-        const taskCount = document.getElementById('taskCount');
+  const comp = selectedComponent();
+  if (!comp) return;
+  const t = getTemplate(comp);
 
-        let tasks = JSON.parse(localStorage.getItem('gh_demo_tasks') || '[]');
+  const actionEl = e.target.closest('[data-action]');
+  if (actionEl) { doPanelAction(actionEl, comp, t); return; }
 
-        function saveAndRenderTasks() {
-            localStorage.setItem('gh_demo_tasks', JSON.stringify(tasks));
-            renderTasks();
-        }
+  const visEl = e.target.closest('[data-pad-vis]');
+  if (visEl) {
+    const hit = findPadAnywhere(t, visEl.dataset.padVis);
+    if (hit) { hit.pad.visible = visEl.checked; render(); scheduleSave(); }
+    return;
+  }
 
-        function renderTasks() {
-            taskList.innerHTML = '';
-            
-            if (tasks.length === 0) {
-                emptyState.classList.remove('hidden');
-                taskCount.textContent = '0 Tasks';
-                return;
-            }
+  const grpAlign = e.target.closest('[data-group-align]');
+  if (grpAlign) {
+    const hit = findGroupId(t, grpAlign.dataset.groupAlign);
+    if (hit) { hit.group.align = grpAlign.value; render(); scheduleSave(); }
+    return;
+  }
 
-            emptyState.classList.add('hidden');
-            const completedCount = tasks.filter(t => t.completed).length;
-            taskCount.textContent = `${completedCount}/${tasks.length} Completed`;
+  const grpSpace = e.target.closest('[data-group-spacing]');
+  if (grpSpace) {
+    const hit = findGroupId(t, grpSpace.dataset.groupSpacing);
+    if (hit) {
+      hit.group.spacing = Math.max(1, num(grpSpace.value, hit.group.spacing || 6));
+      render(); scheduleSave();
+    }
+    return;
+  }
 
-            tasks.forEach((task, index) => {
-                const li = document.createElement('li');
-                li.className = `flex items-center justify-between p-3 rounded-xl border transition-all duration-200 ${
-                    task.completed 
-                        ? 'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700 text-gray-400 dark:text-gray-500 line-through' 
-                        : 'bg-gray-50 dark:bg-gray-700/50 border-gray-200 dark:border-gray-600 text-gray-800 dark:text-gray-100'
-                }`;
+  const grpLabel = e.target.closest('[data-group-label]');
+  if (grpLabel) {
+    const hit = findGroupId(t, grpLabel.dataset.groupLabel);
+    if (hit) { hit.group.labelSide = grpLabel.value; render(); scheduleSave(); }
+    return;
+  }
 
-                li.innerHTML = `
-                    <div class="flex items-center space-x-3 cursor-pointer select-none" onclick="toggleTask(${index})">
-                        <button type="button" class="w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${
-                            task.completed 
-                                ? 'bg-emerald-500 border-emerald-500 text-white' 
-                                : 'border-gray-400 dark:border-gray-500'
-                        }">
-                            ${task.completed ? '<i class="fa-solid fa-check text-[10px]"></i>' : ''}
-                        </button>
-                        <span class="text-sm font-medium">${escapeHtml(task.text)}</span>
-                    </div>
-                    <button onclick="deleteTask(${index})" class="text-gray-400 hover:text-red-500 dark:hover:text-red-400 p-1 transition" title="Delete Task">
-                        <i class="fa-regular fa-trash-can text-sm"></i>
-                    </button>
-                `;
-                taskList.appendChild(li);
-            });
-        }
+  const grpConnType = e.target.closest('[data-group-conn-type]');
+  if (grpConnType) {
+    const hit = findGroupId(t, grpConnType.dataset.groupConnType);
+    if (hit && hit.group.kind === 'connector') {
+      hit.group.conn.type = grpConnType.value;
+      renderPanel(); render(); scheduleSave();
+    }
+    return;
+  }
 
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
+  const grpConnPins = e.target.closest('[data-group-conn-pins]');
+  if (grpConnPins) {
+    const hit = findGroupId(t, grpConnPins.dataset.groupConnPins);
+    if (hit && hit.group.kind === 'connector') {
+      hit.group.conn.pins = Math.max(0, num(grpConnPins.value, hit.group.conn.pins || 0));
+      render(); scheduleSave();
+    }
+    return;
+  }
 
-        taskForm.addEventListener('submit', (e) => {
-            e.preventDefault();
-            const text = taskInput.value.trim();
-            if (text) {
-                tasks.push({ text, completed: false });
-                taskInput.value = '';
-                saveAndRenderTasks();
-            }
-        });
+  const padEl = e.target.closest('[data-pad]');
+  if (padEl && padEl.dataset.prop) {
+    const hit = findPadAnywhere(t, padEl.dataset.pad);
+    if (hit) { hit.pad[padEl.dataset.prop] = padEl.value; render(); scheduleSave(); }
+    return;
+  }
 
-        window.toggleTask = function(index) {
-            tasks[index].completed = !tasks[index].completed;
-            saveAndRenderTasks();
-        };
+  const cornerEl = e.target.closest('[data-corner]');
+  if (cornerEl) {
+    const pr = cornerEl.dataset.prop;
+    const c = t.corners[cornerEl.dataset.corner];
+    if (c) { c[pr] = (pr === 'size') ? num(cornerEl.value, c.size) : cornerEl.value; render(); scheduleSave(); }
+    return;
+  }
 
-        window.deleteTask = function(index) {
-            tasks.splice(index, 1);
-            saveAndRenderTasks();
-        };
+  const holeEl = e.target.closest('[data-hole]');
+  if (holeEl) {
+    const key = holeEl.dataset.hole;
+    t.mounting_holes[key] = ['diameter', 'spanX', 'spanY'].includes(key)
+      ? num(holeEl.value, t.mounting_holes[key]) : holeEl.value;
+    if (key === 'pattern') renderPanel();
+    render(); scheduleSave();
+    return;
+  }
 
-        // Initial Task Render
-        renderTasks();
-    </script>
+  const field = e.target.dataset.field;
+  if (field) { applyCompField(comp, t, field, e.target.value); render(); scheduleSave(); }
+}
+
+/* =================================================================
+   11b. GROUP / PAD DRAG-AND-DROP
+   ================================================================= */
+let dragCtx = null;          // { type:'pad'|'group', id }
+
+/** Resolve the drop target under the cursor (shared by dragover + drop). */
+function dropZone(target, clientY) {
+  const padEl = target.closest('.pad-item');
+  if (padEl) {
+    const r = padEl.getBoundingClientRect();
+    return { groupId: padEl.dataset.group, padId: padEl.dataset.pad,
+             edge: padEl.dataset.edge, before: clientY < r.top + r.height / 2 };
+  }
+  const grpPads = target.closest('.grp-pads');
+  if (grpPads) {
+    const card = grpPads.closest('[data-edge]');
+    return { groupId: grpPads.dataset.groupDrop, edge: card ? card.dataset.edge : null };
+  }
+  const card = target.closest('.grp-card');
+  if (card) return { groupId: card.dataset.group, edge: card.dataset.edge };
+  const list = target.closest('.grp-list');
+  if (list) return { edge: list.dataset.edge };
+  const sec = target.closest('.edge-sec');
+  if (sec) { const l = sec.querySelector('.grp-list'); return { edge: l ? l.dataset.edge : null }; }
+  return null;
+}
+
+function clearDropMarks() {
+  panel.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
+}
+
+function removeGroupById(t, id) {
+  for (const edge of EDGES) {
+    const list = (t.edges && t.edges[edge]) || [];
+    const i = list.findIndex(g => g.id === id);
+    if (i >= 0) { list.splice(i, 1); return true; }
+  }
+  return false;
+}
+
+/** A `pads` group on `edge` — the first one, creating it if none exists. */
+function padsGroupOn(t, edge) {
+  const list = t.edges[edge] || (t.edges[edge] = []);
+  let g = list.find(x => x.kind === 'pads');
+  if (!g) { g = padsGroup('g' + uid(), 'center', 6, []); list.push(g); }
+  return g;
+}
+
+function onPanelDragStart(e) {
+  const padEl = e.target.closest('.pad-item');
+  if (padEl) {
+    dragCtx = { type: 'pad', id: padEl.dataset.pad };
+  } else {
+    const grpEl = e.target.closest('.grp-card');
+    if (!grpEl) return;
+    dragCtx = { type: 'group', id: grpEl.dataset.group };
+  }
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', dragCtx.id);
+}
+
+function onPanelDragOver(e) {
+  if (!dragCtx) return;
+  const zone = dropZone(e.target, e.clientY);
+  if (!zone) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  clearDropMarks();
+  const el = zone.padId ? panel.querySelector(`.pad-item[data-pad="${zone.padId}"]`)
+    : zone.groupId ? panel.querySelector(`.grp-card[data-group="${zone.groupId}"]`)
+    : panel.querySelector(`.grp-list[data-edge="${zone.edge}"]`);
+  if (el) el.classList.add('drop-target');
+}
+
+function onPanelDragEnd() { dragCtx = null; clearDropMarks(); }
+
+function onPanelDrop(e) {
+  if (!dragCtx) return;
+  const zone = dropZone(e.target, e.clientY);
+  if (!zone) return;
+  e.preventDefault();
+  const comp = selectedComponent();
+  if (!comp) return;
+  const t = getTemplate(comp);
+  applyDrop(t, zone);
+  dragCtx = null;
+  clearDropMarks();
+  renderPanel(); render(); scheduleSave();
+}
+
+function applyDrop(t, zone) {
+  if (dragCtx.type === 'pad') {
+    movePadDrop(t, zone);
+  } else {
+    moveGroupDrop(t, zone);
+  }
+}
+
+function movePadDrop(t, zone) {
+  const src = findPadAnywhere(t, dragCtx.id);
+  if (!src) return;
+  const pad = src.group.pads[src.idx];
+
+  let dest = null;
+  if (zone.groupId) {
+    const g = findGroupId(t, zone.groupId);
+    if (g && g.group.kind === 'pads') dest = g.group;
+  }
+  if (!dest && zone.edge) dest = padsGroupOn(t, zone.edge);
+  if (!dest) return;                                  // dropped somewhere invalid
+
+  src.group.pads.splice(src.idx, 1);
+  let idx = dest.pads.length;
+  if (zone.padId && dest.pads.some(p => p.id === zone.padId)) {
+    const at = dest.pads.findIndex(p => p.id === zone.padId);
+    idx = zone.before ? at : at + 1;
+  }
+  dest.pads.splice(idx, 0, pad);
+  if (src.group.pads.length === 0 && src.group.id !== dest.id) removeGroupById(t, src.group.id);
+}
+
+function moveGroupDrop(t, zone) {
+  const src = findGroupId(t, dragCtx.id);
+  if (!src) return;
+  const destEdge = zone.edge || src.edge;
+  if (!t.edges[destEdge]) t.edges[destEdge] = [];
+
+  const [g] = src.list.splice(src.idx, 1);
+  const destList = t.edges[destEdge];
+  let idx = destList.length;
+  const ref = (zone.groupId && zone.groupId !== g.id) ? zone.groupId : null;
+  if (ref) { const at = destList.findIndex(x => x.id === ref); idx = at >= 0 ? at : destList.length; }
+  destList.splice(idx, 0, g);
+  if (src.edge !== destEdge) g.align = 'center';
+}
+
+/* =================================================================
+   12. BOOT
+   ================================================================= */
+function populateLibrary() {
+  Object.keys(TEMPLATES).forEach(k => {
+    const o = document.createElement('option');
+    o.value = k;
+    o.textContent = TEMPLATES[k].name;
+    libSelect.appendChild(o);
+  });
+}
+
+function positionPanel() {
+  const header = document.querySelector('header');
+  if (header) panel.style.top = (header.offsetHeight + 8) + 'px';
+}
+
+function init() {
+  populateLibrary();
+  loadState();
+  syncUI();
+  applyTransform();
+  render();
+  positionPanel();
+  renderPanel();
+}
+
+window.addEventListener('resize', positionPanel);
+
+/* Panel events (delegated). */
+panel.addEventListener('input', handlePanel);
+panel.addEventListener('change', handlePanel);
+panel.addEventListener('click', handlePanel);
+panel.addEventListener('dragstart', onPanelDragStart);
+panel.addEventListener('dragover', onPanelDragOver);
+panel.addEventListener('drop', onPanelDrop);
+panel.addEventListener('dragend', onPanelDragEnd);
+
+svg.addEventListener('pointerdown', onPointerDown);
+svg.addEventListener('pointermove', onPointerMove);
+svg.addEventListener('pointerup', onPointerUp);
+svg.addEventListener('pointercancel', onPointerUp);
+svg.addEventListener('wheel', onWheel, { passive: false });
+svg.addEventListener('contextmenu', e => e.preventDefault());
+
+init();
+</script>
 </body>
 </html>
