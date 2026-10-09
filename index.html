@@ -278,7 +278,7 @@
       <div class="logo">FPV</div>
       <div>
         <h1>FPV Wiring Schematic Builder</h1>
-        <p>Phase 3 — wiring engine: routing, gauge &amp; wire styling</p>
+        <p>Parametric parts &middot; routed &amp; styled wires &middot; .fpv / SVG / PNG export</p>
       </div>
     </div>
 
@@ -639,28 +639,49 @@ const TEMPLATES = {
       ], 0, 'Power') ],
       left: [
         padsGroup('g_esc_m4', 'left', 3, [
-          { id:'m4_1', label:'1', signal_type:'aux', visible:true },
-          { id:'m4_2', label:'2', signal_type:'aux', visible:true },
-          { id:'m4_3', label:'3', signal_type:'aux', visible:true }
-        ], 4, 'Motor 4'),
+          { id:'m4_1', label:'1', signal_type:'motor', visible:true },
+          { id:'m4_2', label:'2', signal_type:'motor', visible:true },
+          { id:'m4_3', label:'3', signal_type:'motor', visible:true }
+        ], 0, 'Motor 4'),
         padsGroup('g_esc_m3', 'right', 3, [
-          { id:'m3_1', label:'1', signal_type:'aux', visible:true },
-          { id:'m3_2', label:'2', signal_type:'aux', visible:true },
-          { id:'m3_3', label:'3', signal_type:'aux', visible:true }
-        ], 4, 'Motor 3')
+          { id:'m3_1', label:'1', signal_type:'motor', visible:true },
+          { id:'m3_2', label:'2', signal_type:'motor', visible:true },
+          { id:'m3_3', label:'3', signal_type:'motor', visible:true }
+        ], 0, 'Motor 3')
       ],
       right: [
         padsGroup('g_esc_m2', 'left', 3, [
-          { id:'m2_1', label:'1', signal_type:'aux', visible:true },
-          { id:'m2_2', label:'2', signal_type:'aux', visible:true },
-          { id:'m2_3', label:'3', signal_type:'aux', visible:true }
-        ], 4, 'Motor 2'),
+          { id:'m2_1', label:'1', signal_type:'motor', visible:true },
+          { id:'m2_2', label:'2', signal_type:'motor', visible:true },
+          { id:'m2_3', label:'3', signal_type:'motor', visible:true }
+        ], 0, 'Motor 2'),
         padsGroup('g_esc_m1', 'right', 3, [
-          { id:'m1_1', label:'1', signal_type:'aux', visible:true },
-          { id:'m1_2', label:'2', signal_type:'aux', visible:true },
-          { id:'m1_3', label:'3', signal_type:'aux', visible:true }
-        ], 4, 'Motor 1')
+          { id:'m1_1', label:'1', signal_type:'motor', visible:true },
+          { id:'m1_2', label:'2', signal_type:'motor', visible:true },
+          { id:'m1_3', label:'3', signal_type:'motor', visible:true }
+        ], 0, 'Motor 1')
       ]
+    }
+  },
+
+  /* --- Motor: round body (corners = 1/2 of size -> circle), 3 phase pads.
+         Phase pads use signal_type 'motor': black wire, 20 AWG default. --- */
+  motor: {
+    template_id: 'motor',
+    name: 'Motor',
+    width: 30, height: 30,
+    corners: {
+      top_left:{type:'round',size:15}, top_right:{type:'round',size:15},
+      bottom_left:{type:'round',size:15}, bottom_right:{type:'round',size:15}
+    },
+    mounting_holes: { pattern:'none', diameter:3 },
+    edges: {
+      bottom: [ padsGroup('g_motor_phases', 'center', 3, [
+        { id:'mot_1', label:'1', signal_type:'motor', visible:true },
+        { id:'mot_2', label:'2', signal_type:'motor', visible:true },
+        { id:'mot_3', label:'3', signal_type:'motor', visible:true }
+      ], 0, 'Phases') ],
+      top: [], left: [], right: []
     }
   },
 
@@ -704,6 +725,23 @@ const TEMPLATES = {
         { id:'cam_vid', label:'VIDEO', signal_type:'video',     visible:true }
       ], 0, 'Pins', '', 270) ],
       bottom: [], left: [], right: []
+    }
+  },
+
+  /* --- Custom Part: blank board the user builds from scratch.
+         Offered only in the Library add-part menu (never seeded into the
+         default test layout); shape it via the properties panel. --- */
+  custom: {
+    template_id: 'custom',
+    name: 'Custom Part',
+    width: 30, height: 30,
+    corners: {
+      top_left:{type:'round',size:2}, top_right:{type:'round',size:2},
+      bottom_left:{type:'round',size:2}, bottom_right:{type:'round',size:2}
+    },
+    mounting_holes: { pattern: 'none', diameter: 3 },
+    edges: {
+      top: [], right: [], bottom: [], left: []
     }
   }
 };
@@ -1053,13 +1091,17 @@ const WIRE_COLORS = {
   tx:        '#FFFFFF',   // white
   rx:        '#4CAF50',   // green
   telemetry: '#1E88E5',   // blue
-  aux:       '#FB8C00'    // orange
+  aux:       '#FB8C00',   // orange
+  motor:     '#000000'    // black — 3-phase motor wire
 };
 
 function signalColor(label, signalType) {
   const s = (signalType || '').toLowerCase();
   const l = (label || '').toLowerCase();
   const lTrim = l.replace(/[+\-]/g, '');
+
+  // Phase wire: always black, even though the pad label is just "1"/"2"/"3".
+  if (s === 'motor') return WIRE_COLORS.motor;
 
   if (s === 'ground' || l === 'gnd' || l === 'ground' || l === '-' || lTrim === 'gnd') return WIRE_COLORS.ground;
   if (s === 'power_pos' || ['5v','9v','bat','vcc','vbat','+','3v3','12v'].includes(lTrim)) return WIRE_COLORS.power;
@@ -1692,12 +1734,12 @@ function findTarget(compId, targetId) {
 }
 
 /* --- 6c. Committed wires --- */
-/** Default wire gauge (AWG) for new wires: 30 AWG for everything.
- *  TODO(later stages): implement wire gauge AUTO-SELECT from signal type /
- *  current draw (e.g. power+gnd thicker, UART/control thinner) instead of
- *  the fixed 30 AWG below. */
+/** Default wire gauge (AWG) for new wires: 20 AWG for motor phase wires,
+ *  30 AWG for everything else.
+ *  TODO(later stages): extend gauge AUTO-SELECT to current draw (power+gnd
+ *  thicker, UART/control thinner) instead of the fixed table below. */
 function defaultGauge(signalType) {
-  return 30;
+  return (String(signalType || '').toLowerCase() === 'motor') ? 20 : 30;
 }
 
 /** A contrasting tint of a wire colour, for two-tone "striped" styling. */
@@ -2183,6 +2225,15 @@ function seedState() {
   const fcb  = instantiate('fc_back', 'FC Back',          480,  90, 'fcb_1');
   fc.pair_id = fcb.instance_id;
   fcb.pair_id = fc.instance_id;
+
+  // Four motors flanking the ESC (ESC box: x 330-465, y 360-483 px), each
+  // rotated so its phase pads point at the ESC: -90° faces right, +90° left.
+  const motorAt = (id, label, x, y, rot) => {
+    const m = instantiate('motor', label, x, y, id);
+    m.rotation = rot;
+    return m;
+  };
+
   state = {
     mode: 'edit',
     background: 'dark_grid',
@@ -2195,6 +2246,10 @@ function seedState() {
       fcb,
       instantiate('elrs',   'ELRS Receiver',      60, 120, 'elrs_1'),
       instantiate('esc',    '4-in-1 ESC',        330, 360, 'esc_1'),
+      motorAt('motor_4', 'Motor 4', 210, 330, -90),   // left of ESC, pads -> right
+      motorAt('motor_3', 'Motor 3', 210, 435, -90),
+      motorAt('motor_2', 'Motor 2', 495, 330,  90),   // right of ESC, pads -> left
+      motorAt('motor_1', 'Motor 1', 495, 435,  90),
       instantiate('vtx',    'Analog VTX',         60, 330, 'vtx_1'),
       instantiate('camera', 'Analog Camera',      60, 560, 'cam_1')
     ],
@@ -2485,7 +2540,8 @@ const LABEL_POS_OPTS = [['top','Top'], ['bottom','Bottom'], ['left','Left'], ['r
 const LABEL_ROT_OPTS = [[0,'0&deg;'], [90,'90&deg;'], [180,'180&deg;'], [270,'270&deg;']];
 const SIGNAL_OPTS = [
   ['ground','GND'], ['power_pos','PWR'], ['video','VID'],
-  ['uart_tx','TX'], ['uart_rx','RX'], ['telemetry','TLM'], ['aux','AUX']
+  ['uart_tx','TX'], ['uart_rx','RX'], ['telemetry','TLM'], ['aux','AUX'],
+  ['motor','MTR']
 ];
 const HOLE_PATTERNS = ['none', '12x12', '16x16', '20x20', '25.5x25.5', '30.5x30.5', 'custom'];
 const CONN_NAMES = { jst_sh_socket:'JST-SH', gh1_25_socket:'GH1.25', xt60_male:'XT60', xt30_male:'XT30', usb_c_port:'USB-C' };
