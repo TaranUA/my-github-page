@@ -61,13 +61,14 @@
   .control{ display:flex; align-items:center; gap:6px; font-size:12px; color:var(--ui-muted); }
   .control > label{ font-size:11px; text-transform:uppercase; letter-spacing:.6px; }
 
-  select, button{
+  select, button, input[type=number]{
     font-family:inherit; font-size:12px; color:var(--ui-text);
     background:var(--ui-panel-2);
     border:1px solid var(--ui-border);
     border-radius:8px; padding:6px 10px; cursor:pointer;
     transition: background .15s, border-color .15s, transform .05s;
   }
+  input[type=number]{ width:56px; text-align:center; padding:6px 4px; }
   select:hover, button:hover{ background:#1e2c46; border-color:#33456b; }
   button:active{ transform:translateY(1px); }
   button:focus-visible, select:focus-visible{ outline:2px solid var(--ui-accent); outline-offset:1px; }
@@ -100,7 +101,7 @@
   .board-shadow{ fill: rgba(0,0,0,.45); }
   .board-body{ fill:#1f2937; stroke:#4b5563; stroke-width:1.5; }
   .board-inner{ fill:none; stroke:rgba(148,163,184,.35); stroke-width:.8; }
-  .comp-label{ fill:#cbd5e1; font-size:9.5px; font-weight:600; text-anchor:middle; }
+  .comp-label{ fill:#cbd5e1; font-size:9.5px; font-weight:600; }
 
   .hole-ring{ fill:#0b1220; stroke:#7c8aa3; stroke-width:1; }
   .hole-copper{ fill:none; stroke:#b9922f; stroke-width:1; }
@@ -109,6 +110,7 @@
   .pad-hit{ fill:transparent; }
   .pad-copper{ fill:#e0a83c; stroke:#8a6a1c; stroke-width:.7; }
   .pad-dot{ fill:#3b2c07; }
+  .pad-conn{ stroke:#0b1220; stroke-width:.6; }
   .pad-label{ fill:#dbe6f5; font-size:7px; font-weight:600; paint-order:stroke; stroke:#0b1220; stroke-width:1.6px; }
 
   /* Connector pin snap targets */
@@ -123,8 +125,7 @@
   .conn-body-gh{ fill:#151b24; stroke:#b6c2d4; stroke-width:1; }
   .conn-key-gh{ fill:#b6c2d4; }
   .conn-body-usb{ fill:#c7ced8; stroke:#7c8695; stroke-width:1; }
-  .conn-usb-tongue{ fill:#2a303a; }
-  .conn-usb-dot{ fill:#8a919c; }
+  .conn-usb-pad{ fill:#e7b53a; stroke:#8a6a1c; stroke-width:.6; }
   .conn-label{ fill:#9fb2cc; font-size:6px; text-anchor:middle; }
 
   .snap-target{ cursor: crosshair; }
@@ -312,6 +313,26 @@
       </select>
     </div>
 
+    <!-- Straight lead-out length before a wire may turn sideways -->
+    <div class="control">
+      <label for="leadoutInput">Lead-out</label>
+      <input id="leadoutInput" type="number" min="1" max="50" step="1" value="15">
+      <span style="font-size:11px">mm</span>
+    </div>
+
+    <!-- Export / import of the project and rendered images -->
+    <div class="control">
+      <label for="exportSel">File</label>
+      <select id="exportSel">
+        <option value="fpv">Project (.fpv)</option>
+        <option value="svg">Drawing (.svg)</option>
+        <option value="png">Drawing (.png)</option>
+      </select>
+      <button id="exportGo" title="Download the selected file">Export</button>
+      <button id="importGo" title="Load a previously saved .fpv project">Import</button>
+      <input id="importFile" type="file" accept=".fpv,.json,application/json" hidden>
+    </div>
+
     <!-- Zoom controls -->
     <div class="control">
       <div class="zoom-group">
@@ -353,8 +374,10 @@
     <g id="world">
       <rect id="bgFill" class="grid-fill" x="-100000" y="-100000" width="200000" height="200000" fill="#0f172a"/>
       <rect id="bgGrid" class="grid-fill" x="-100000" y="-100000" width="200000" height="200000" fill="url(#gridMajor)"/>
+      <g id="layerWiresUnder"></g>
+      <g id="layerBoards"></g>
       <g id="layerWires"></g>
-      <g id="layerComponents"></g>
+      <g id="layerPads"></g>
       <g id="layerOverlay"></g>
     </g>
   </svg>
@@ -404,8 +427,10 @@ const bgFill     = document.getElementById('bgFill');
 const bgGrid     = document.getElementById('bgGrid');
 const gridMinorPath = document.getElementById('gridMinorPath');
 const gridMajorPath = document.getElementById('gridMajorPath');
+const layerWiresUnder = document.getElementById('layerWiresUnder');
+const layerBoards = document.getElementById('layerBoards');
 const layerWires = document.getElementById('layerWires');
-const layerComponents = document.getElementById('layerComponents');
+const layerPads = document.getElementById('layerPads');
 const layerOverlay = document.getElementById('layerOverlay');
 const zoomLabel  = document.getElementById('zoomLabel');
 const hoverInfo  = document.getElementById('hoverInfo');
@@ -418,13 +443,17 @@ const libSelect  = document.getElementById('libSelect');
 /* Helper builders for the edge-group model:
    every edge holds an ORDERED list of groups; a group is either a "pads"
    group (evenly spaced pads, single spacing value) or a "connector". */
-function padsGroup(id, align, spacing, pads, cross, name, labelSide) {
+function padsGroup(id, align, spacing, pads, cross, name, labelSide, labelRot, fit) {
   // `cross`     = mm inset from the edge (lets one edge hold stacked rows);
   // `name`      = optional display label for the group (e.g. "Motor 4");
   // `labelSide` = 'top'|'bottom' (top/bottom edges) or 'left'|'right'
   //               (side edges); '' = auto (outer row outward, inner row inward).
+  // `labelRot`  = label text rotation in degrees (0 = horizontal).
+  // `fit`       = auto-distribute pads across the edge so a board resize
+  //               re-flows the gap instead of overflowing (spacing is ignored).
   return { id, kind: 'pads', align, spacing, pads,
-           cross: cross || 0, name: name || '', labelSide: labelSide || '' };
+           cross: cross || 0, name: name || '', labelSide: labelSide || '',
+           labelRot: labelRot || 0, fit: !!fit };
 }
 
 /** Where a pads group's labels sit; auto when not explicitly set. */
@@ -465,7 +494,7 @@ const TEMPLATES = {
           { id:'fc_g2',  label:'G',   signal_type:'ground',    visible:true },
           { id:'fc_5v2', label:'5V',  signal_type:'power_pos', visible:true },
           { id:'fc_led', label:'LED', signal_type:'aux',       visible:true }
-        ], 0, 'Row 1'),
+        ], 0, 'Row 1', '', 270),
         padsGroup('g_fc_top_r2', 'center', 3, [
           { id:'fc_t2',    label:'T2',  signal_type:'uart_tx',   visible:true },
           { id:'fc_r2',    label:'R2',  signal_type:'uart_rx',   visible:true },
@@ -477,7 +506,7 @@ const TEMPLATES = {
           { id:'fc_g5',    label:'G',   signal_type:'ground',    visible:true },
           { id:'fc_5v4',   label:'5V',  signal_type:'power_pos', visible:true },
           { id:'fc_s6',    label:'S6',  signal_type:'aux',       visible:true }
-        ], 4, 'Row 2')
+        ], 4, 'Row 2', '', 270)
       ],
       bottom: [
         padsGroup('g_fc_bot_r1', 'center', 3, [
@@ -491,7 +520,7 @@ const TEMPLATES = {
           { id:'fc_r6',   label:'R6',   signal_type:'uart_rx',   visible:true },
           { id:'fc_t6',   label:'T6',   signal_type:'uart_tx',   visible:true },
           { id:'fc_3v3',  label:'3V3',  signal_type:'power_pos', visible:true }
-        ], 0, 'Row 1'),
+        ], 4, 'Row 1', '', 90),
         padsGroup('g_fc_bot_r2', 'center', 3, [
           { id:'fc_da',    label:'DA',  signal_type:'aux',       visible:true },
           { id:'fc_cl',    label:'CL',  signal_type:'aux',       visible:true },
@@ -503,28 +532,28 @@ const TEMPLATES = {
           { id:'fc_g9',    label:'G',   signal_type:'ground',    visible:true },
           { id:'fc_4v5_c', label:'4V5', signal_type:'power_pos', visible:true },
           { id:'fc_rs',    label:'RS',  signal_type:'aux',       visible:true }
-        ], 4, 'Row 2')
+        ], 0, 'Row 2', '', 90)
       ],
       left: [
-        padsGroup('g_fc_left_top', 'left', 2.54, [
+        padsGroup('g_fc_left_top', 'left', 3, [
           { id:'fc_lu_g',  label:'G',  signal_type:'ground',    visible:true },
           { id:'fc_lu_5v', label:'5V', signal_type:'power_pos', visible:true },
           { id:'fc_lu_d',  label:'D',  signal_type:'aux',       visible:true }
         ], 0, 'Upper'),
-        padsGroup('g_fc_left_bot', 'right', 2.54, [
+        padsGroup('g_fc_left_bot', 'right', 3, [
           { id:'fc_ll_d',  label:'D',  signal_type:'aux',       visible:true },
           { id:'fc_ll_5v', label:'5V', signal_type:'power_pos', visible:true },
           { id:'fc_ll_g',  label:'G',  signal_type:'ground',    visible:true }
         ], 0, 'Lower')
       ],
       right: [
-        padsGroup('g_fc_right_top', 'left', 2.54, [
+        padsGroup('g_fc_right_top', 'left', 3, [
           { id:'fc_ru_g',  label:'G',  signal_type:'ground',    visible:true },
           { id:'fc_ru_5v', label:'5V', signal_type:'power_pos', visible:true },
           { id:'fc_ru_d',  label:'D',  signal_type:'aux',       visible:true }
         ], 0, 'Upper'),
         connGroup('g_fc_usb', 'center', { id:'fc_usb', type:'usb_c_port', pins:0 }),
-        padsGroup('g_fc_right_bot', 'right', 2.54, [
+        padsGroup('g_fc_right_bot', 'right', 3, [
           { id:'fc_rl_d',  label:'D',  signal_type:'aux',       visible:true },
           { id:'fc_rl_5v', label:'5V', signal_type:'power_pos', visible:true },
           { id:'fc_rl_g',  label:'G',  signal_type:'ground',    visible:true }
@@ -533,18 +562,47 @@ const TEMPLATES = {
     }
   },
 
+  /* --- FC back side: linked companion part created with every FC. ---
+     Pads left-aligned on the top edge: motors 4-3-2-1, Telemetry,
+     Current, Ground, VBAT. */
+  fc_back: {
+    template_id: 'fc_back',
+    name: 'FC Back Side',
+    width: 39, height: 39,
+    corners: {
+      top_left:{type:'round',size:4}, top_right:{type:'round',size:4},
+      bottom_left:{type:'round',size:4}, bottom_right:{type:'round',size:4}
+    },
+    mounting_holes: { pattern: '30.5x30.5', diameter: 3 },
+    edges: {
+      top: [
+        padsGroup('g_fcb_top', 'left', 3, [
+          { id:'fb_4', label:'4', signal_type:'aux',       visible:true },
+          { id:'fb_3', label:'3', signal_type:'aux',       visible:true },
+          { id:'fb_2', label:'2', signal_type:'aux',       visible:true },
+          { id:'fb_1', label:'1', signal_type:'aux',       visible:true },
+          { id:'fb_t', label:'T', signal_type:'telemetry', visible:true },
+          { id:'fb_c', label:'C', signal_type:'aux',       visible:true },
+          { id:'fb_g', label:'G', signal_type:'ground',    visible:true },
+          { id:'fb_v', label:'V', signal_type:'power_pos', visible:true }
+        ], 0, 'Pads', 'top', 0)
+      ],
+      right: [], bottom: [], left: []
+    }
+  },
+
   /* --- ELRS Receiver: 22x18 board, 4 solder pads on the bottom edge --- */
   elrs: {
     template_id: 'elrs',
     name: 'ELRS Receiver',
-    width: 22, height: 18,
+    width: 18, height: 22,
     corners: {
       top_left:{type:'round',size:2}, top_right:{type:'round',size:2},
       bottom_left:{type:'round',size:2}, bottom_right:{type:'round',size:2}
     },
     mounting_holes: { pattern:'none', diameter:2 },
     edges: {
-      bottom: [ padsGroup('g_rx_pads', 'center', 4.5, [
+      bottom: [ padsGroup('g_rx_pads', 'center', 3, [
         { id:'rx_rx',  label:'RX',  signal_type:'uart_rx',   visible:true },
         { id:'rx_tx',  label:'TX',  signal_type:'uart_tx',   visible:true },
         { id:'rx_5v',  label:'5V',  signal_type:'power_pos', visible:true },
@@ -565,7 +623,7 @@ const TEMPLATES = {
     },
     mounting_holes: { pattern: '30.5x30.5', diameter: 3 },
     edges: {
-      top: [ padsGroup('g_esc_top', 'center', 4, [
+      top: [ padsGroup('g_esc_top', 'center', 3, [
         { id:'esc_v',  label:'V', signal_type:'power_pos', visible:true },
         { id:'esc_g1', label:'G', signal_type:'ground',    visible:true },
         { id:'esc_c',  label:'C', signal_type:'telemetry', visible:true },
@@ -575,29 +633,29 @@ const TEMPLATES = {
         { id:'esc_o3', label:'3', signal_type:'aux',       visible:true },
         { id:'esc_o4', label:'4', signal_type:'aux',       visible:true }
       ], 0, 'Signal') ],
-      bottom: [ padsGroup('g_esc_bot', 'center', 6, [
+      bottom: [ padsGroup('g_esc_bot', 'center', 3, [
         { id:'esc_pos', label:'+', signal_type:'power_pos', visible:true },
         { id:'esc_neg', label:'-', signal_type:'ground',    visible:true }
       ], 0, 'Power') ],
       left: [
-        padsGroup('g_esc_m4', 'left', 4, [
+        padsGroup('g_esc_m4', 'left', 3, [
           { id:'m4_1', label:'1', signal_type:'aux', visible:true },
           { id:'m4_2', label:'2', signal_type:'aux', visible:true },
           { id:'m4_3', label:'3', signal_type:'aux', visible:true }
         ], 4, 'Motor 4'),
-        padsGroup('g_esc_m3', 'right', 4, [
+        padsGroup('g_esc_m3', 'right', 3, [
           { id:'m3_1', label:'1', signal_type:'aux', visible:true },
           { id:'m3_2', label:'2', signal_type:'aux', visible:true },
           { id:'m3_3', label:'3', signal_type:'aux', visible:true }
         ], 4, 'Motor 3')
       ],
       right: [
-        padsGroup('g_esc_m2', 'left', 4, [
+        padsGroup('g_esc_m2', 'left', 3, [
           { id:'m2_1', label:'1', signal_type:'aux', visible:true },
           { id:'m2_2', label:'2', signal_type:'aux', visible:true },
           { id:'m2_3', label:'3', signal_type:'aux', visible:true }
         ], 4, 'Motor 2'),
-        padsGroup('g_esc_m1', 'right', 4, [
+        padsGroup('g_esc_m1', 'right', 3, [
           { id:'m1_1', label:'1', signal_type:'aux', visible:true },
           { id:'m1_2', label:'2', signal_type:'aux', visible:true },
           { id:'m1_3', label:'3', signal_type:'aux', visible:true }
@@ -610,21 +668,21 @@ const TEMPLATES = {
   vtx: {
     template_id: 'vtx',
     name: 'Analog VTX',
-    width: 47, height: 30.4,
+    width: 30.4, height: 47,
     corners: {
       top_left:{type:'round',size:3}, top_right:{type:'round',size:3},
       bottom_left:{type:'round',size:3}, bottom_right:{type:'round',size:3}
     },
     mounting_holes: { pattern:'none', diameter:2 },
     edges: {
-      bottom: [ padsGroup('g_vtx_pins', 'center', 6, [
+      bottom: [ padsGroup('g_vtx_pins', 'center', 3, [
         { id:'vtx_irc',   label:'IRC',     signal_type:'aux',       visible:true },
         { id:'vtx_vtx',   label:'VTX',     signal_type:'video',     visible:true },
         { id:'vtx_gnd',   label:'GND',     signal_type:'ground',    visible:true },
         { id:'vtx_5vout', label:'5V_OUT',  signal_type:'power_pos', visible:true },
         { id:'vtx_gnd2',  label:'GND',     signal_type:'ground',    visible:true },
         { id:'vtx_vcc',   label:'VCC_IN',  signal_type:'power_pos', visible:true }
-      ]) ],
+      ], 0, '', '', 90) ],
       top: [], left: [], right: []
     }
   },
@@ -640,11 +698,11 @@ const TEMPLATES = {
     },
     mounting_holes: { pattern:'none', diameter:2 },
     edges: {
-      top: [ padsGroup('g_cam_pins', 'left', 3.5, [
+      top: [ padsGroup('g_cam_pins', 'left', 3, [
         { id:'cam_vcc', label:'VCC',   signal_type:'power_pos', visible:true },
         { id:'cam_gnd', label:'GND',   signal_type:'ground',    visible:true },
         { id:'cam_vid', label:'VIDEO', signal_type:'video',     visible:true }
-      ], 0, 'Pins') ],
+      ], 0, 'Pins', '', 270) ],
       bottom: [], left: [], right: []
     }
   }
@@ -782,7 +840,7 @@ function edgeLocal(t, edge, along, cross) {
 function groupLength(t, g) {
   if (g.kind === 'connector') return connectorGeom(g.conn).bw;
   const n = (g.pads || []).length;
-  return Math.max(0, (n - 1) * (Number(g.spacing) || 6));
+  return Math.max(0, (n - 1) * (Number(g.spacing) || 3));
 }
 
 /**
@@ -798,15 +856,30 @@ function layoutEdge(t, edge) {
   const lanes = {};                 // cursor per cross-offset "row"
   const placed = [];
   for (const g of list) {
-    const L = groupLength(t, g);
     const lane = g.cross || 0;
     const cursor = lanes[lane] || margin;
+    const n = (g.pads || []).length;
+    let L, fitSpacing = null;
+    if (g.kind === 'pads' && g.fit && n > 1) {
+      // Auto-fit: spread the pads over the usable edge (or the space left on
+      // this lane) so resizing the board re-flows the gap automatically.
+      const usableEnd = len - margin;
+      const span = (g.align === 'center')
+        ? (usableEnd - margin)
+        : (usableEnd - Math.max(cursor, margin));
+      L = Math.max(0, span);
+      fitSpacing = L / (n - 1);
+    } else {
+      L = groupLength(t, g);
+    }
     let start = g.align === 'center' ? (len - L) / 2
               : g.align === 'right'  ? len - margin - L
               : margin;
     start = Math.max(start, cursor, margin);
     start = Math.min(start, Math.max(margin, len - margin - L));
-    placed.push({ group: g, start, L });
+    const placedItem = { group: g, start, L };
+    if (fitSpacing != null) placedItem.spacing = fitSpacing;
+    placed.push(placedItem);
     lanes[lane] = start + L + gap;
   }
   return placed;
@@ -828,6 +901,11 @@ function edgeDir(edge) {
   return { x: 0, y: 0 };                          // explicit x/y pad: no preferred exit
 }
 
+/** Unit direction *along* a board edge (matches edgeLocal's `along` axis). */
+function edgeTangent(edge) {
+  return (edge === 'left' || edge === 'right') ? { x: 0, y: 1 } : { x: 1, y: 0 };
+}
+
 /**
  * Connector geometry (mm) for body + pin layout.
  * Pitch values are stylised where real parts (1.0/1.25 mm) would be too small
@@ -839,7 +917,7 @@ function connectorGeom(conn) {
   switch (conn.type) {
     case 'xt60_male':      return { kind:'xt',  n, pitch: conn.pitch || 5.5, bw:16, bh:9   };
     case 'xt30_male':      return { kind:'xt',  n, pitch: conn.pitch || 4.5, bw:12, bh:7   };
-    case 'usb_c_port':     return { kind:'usb', n:0, pitch:0,                bw:9,  bh:3.6 };
+    case 'usb_c_port':     return { kind:'usb', n:0, pitch:0,                bw:9,  bh:7   };
     case 'gh1_25_socket': {
       const p = conn.pitch || 3.5;
       return { kind:'gh', n, pitch:p, bw:Math.max(3.5, (n - 1) * p + 2.5), bh:5 };
@@ -865,11 +943,14 @@ function connectorShapes(conn) {
       s += `<circle class="conn-pin-xt" cx="${dx}" cy="0" r="${Math.min(bw, bh) * 0.28}"/>`;
     }
   } else if (g.kind === 'usb') {
-    s += `<rect class="conn-body-usb" x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="1.6"/>`;
-    s += `<rect class="conn-usb-tongue" x="${bx + bw * 0.18}" y="${by + bh * 0.3}" width="${bw * 0.64}" height="${bh * 0.4}" rx="1"/>`;
-    for (let i = 0; i < 4; i++) {
-      const dx = bx + bw * (0.28 + i * 0.15);
-      s += `<circle class="conn-usb-dot" cx="${dx}" cy="0" r="0.9"/>`;
+    // Top view: shell outline + a row of contact pads on the PCB footprint.
+    s += `<rect class="conn-body-usb" x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="1.5"/>`;
+    const n = 6;
+    const pitch = bw / (n + 1);
+    const pw = pitch * 0.62, ph = bh * 0.6;
+    for (let i = 0; i < n; i++) {
+      const cx = bx + pitch * (i + 1);
+      s += `<rect class="conn-usb-pad" x="${cx - pw / 2}" y="${-ph / 2}" width="${pw}" height="${ph}" rx="0.8"/>`;
     }
   } else {
     const bodyCls = g.kind === 'gh' ? 'conn-body-gh' : 'conn-body-jst';
@@ -912,10 +993,11 @@ function dirToWorld(comp, dir) {
   if (comp.flipX) dx = -dx;
   if (comp.flipY) dy = -dy;
   const rad = (comp.rotation || 0) * Math.PI / 180;
-  return {
-    x: dx * Math.cos(rad) - dy * Math.sin(rad),
-    y: dx * Math.sin(rad) + dy * Math.cos(rad)
-  };
+  // Snap float residue (sin(pi) ~ 1.2e-16 etc.) so axis-aligned directions
+  // stay exactly axis-aligned after 90/180/270-degree rotations.
+  const x = dx * Math.cos(rad) - dy * Math.sin(rad);
+  const y = dx * Math.sin(rad) + dy * Math.cos(rad);
+  return { x: Math.abs(x) < 1e-9 ? 0 : x, y: Math.abs(y) < 1e-9 ? 0 : y };
 }
 
 /** All magnetic targets of a template: solder pads + connector pins (local px). */
@@ -941,13 +1023,16 @@ function componentTargets(t) {
           });
         }
       } else {
+          const sp = item.spacing != null ? item.spacing : (Number(g.spacing) || 3);
         g.pads.forEach((p, i) => {
           if (p.visible === false) return;         // sparse-pad visibility
-          const along = item.start + i * (Number(g.spacing) || 6);
+          const along = item.start + i * sp;
           const loc = edgeLocal(t, edge, along, PAD_INSET + (g.cross || 0));
           out.push({
             id: p.id, label: p.label, signal_type: p.signal_type,
             kind: 'pad', edge, labelSide: resolveLabelSide(edge, g),
+            labelRot: g.labelRot || 0,
+            along, cross: PAD_INSET + (g.cross || 0),
             local: { x: loc.x * SCALE, y: loc.y * SCALE },
             dir: edgeDir(edge)
           });
@@ -1022,16 +1107,18 @@ function zoomAt(s, factor) {
   scheduleSave();
 }
 
+/* Background mode definitions (shared by applyBackground and the exporters). */
+const BG_MODES = {
+  dark_grid:   { bg:'#0f172a', minor:'#1e293b', major:'#334155', grid:true  },
+  light_grid:  { bg:'#f1f5f9', minor:'#e2e8f0', major:'#cbd5e1', grid:true  },
+  blueprint:   { bg:'#0b2a4a', minor:'#16385a', major:'#2f6ea8', grid:true  },
+  clean_white: { bg:'#ffffff', minor:null,      major:null,      grid:false },
+  transparent: { bg:'transparent', grid:false }
+};
+
 /** Apply the selected background mode: fill colour, grid colours, CSS bg. */
 function applyBackground() {
-  const modes = {
-    dark_grid:   { bg:'#0f172a', minor:'#1e293b', major:'#334155', grid:true  },
-    light_grid:  { bg:'#f1f5f9', minor:'#e2e8f0', major:'#cbd5e1', grid:true  },
-    blueprint:   { bg:'#0b2a4a', minor:'#16385a', major:'#2f6ea8', grid:true  },
-    clean_white: { bg:'#ffffff', minor:null,      major:null,      grid:false },
-    transparent: { bg:'transparent', grid:false }
-  };
-  const cfg = modes[state.background] || modes.dark_grid;
+  const cfg = BG_MODES[state.background] || BG_MODES.dark_grid;
 
   bgFill.setAttribute('fill', cfg.bg === 'transparent' ? 'none' : cfg.bg);
 
@@ -1079,9 +1166,77 @@ function render() {
 }
 
 /* --- 6a. Components (boards, holes, connectors, pads) --- */
+const LABEL_GAP = 21;   // px between board edge and the name label (was 14)
+const SIDE_VEC = { top:{x:0,y:-1}, bottom:{x:0,y:1}, left:{x:-1,y:0}, right:{x:1,y:0} };
+
+/** Name label placed on one of the board sides (or its centre). */
+function compLabelMarkup(comp, w, h) {
+  const pos = comp.labelPos || 'center';
+  let x, y, anchor = 'middle', baseline = '';
+  if (pos === 'top')         { x = w / 2;        y = -LABEL_GAP; }
+  else if (pos === 'left')   { x = -LABEL_GAP;   y = h / 2; anchor = 'end';   baseline = 'central'; }
+  else if (pos === 'right')  { x = w + LABEL_GAP; y = h / 2; anchor = 'start'; baseline = 'central'; }
+  else if (pos === 'center') { x = w / 2;        y = h / 2; baseline = 'central'; }
+  else                       { x = w / 2;        y = h + LABEL_GAP; }   // bottom
+  const bl = baseline ? ` dominant-baseline="${baseline}"` : '';
+
+  // Counter the component's rotation/flip about the label anchor so the name
+  // stays upright and readable as the part is rotated.
+  const rot = comp.rotation || 0;
+  const sx = comp.flipX ? -1 : 1, sy = comp.flipY ? -1 : 1;
+  const upright = (rot || sx < 0 || sy < 0)
+    ? ` transform="translate(${x} ${y}) scale(${sx} ${sy}) rotate(${-rot}) translate(${-x} ${-y})"`
+    : '';
+  return `<text class="comp-label" x="${x}" y="${y}" text-anchor="${anchor}"${bl}${upright}>${esc(comp.label)}</text>`;
+}
+
+const WIRE_DODGE_MM = 1.5;   // lateral shift for wires leaving a stacked (inner) pad row
+const WIRE_BLOCK_MM = 1.5;   // along-distance within which an outer pad blocks the exit
+
+/**
+ * Pads stacked in rows share an X, so a wire leaving the inner (deeper) row would
+ * run straight over the row in front of it. Give those pads a lateral offset along
+ * the edge so their wires leave beside the outer row instead of through it.
+ * Returns Map "compId\u0000padId" -> world offset vector.
+ */
+function computePadDodges() {
+  const map = new Map();
+  for (const comp of state.components) {
+    const t = getTemplate(comp);
+    if (!t) continue;
+    const pads = componentTargets(t).filter(x => x.kind === 'pad');
+    for (const edge of EDGES) {
+      const list = pads.filter(p => p.edge === edge);
+      if (list.length < 2) continue;
+      for (const p of list) {
+        const seen = new Set();
+        for (const q of list) {
+          if (q === p || q.cross >= p.cross - 0.01) continue;
+          if (Math.abs(q.along - p.along) <= WIRE_BLOCK_MM) seen.add(q.cross.toFixed(2));
+        }
+        if (!seen.size) continue;
+        const dir = dirToWorld(comp, edgeTangent(edge));
+        const amt = seen.size * WIRE_DODGE_MM * SCALE;
+        map.set(comp.instance_id + '\u0000' + p.id, { x: dir.x * amt, y: dir.y * amt });
+      }
+    }
+  }
+  return map;
+}
+
 function renderComponents() {
-  let svgOut = '';
+  let boardOut = '';    // board bodies, holes, connectors (under the wires)
+  let padOut = '';      // pads, pins, labels, selection (over the wires)
   const targets = [];   // flat magnetic-target list for snapping
+
+  // Map each connected pad to a wire colour so pads show a coloured dot.
+  const connColor = new Map();
+  for (const wire of state.wires) {
+    for (const end of [wire.from, wire.to]) {
+      const key = end.comp + '\u0000' + end.target;
+      if (!connColor.has(key)) connColor.set(key, wire.color);
+    }
+  }
 
   for (const comp of state.components) {
     const t = getTemplate(comp);
@@ -1093,14 +1248,17 @@ function renderComponents() {
     const isSel = (selectedId === comp.instance_id);
 
     // Flip is applied about the centre (before rotation), matching localToWorld.
-    svgOut += `<g class="component${isSel ? ' selected' : ''}" data-id="${comp.instance_id}" `
+    // The same group wrapper is emitted twice so the board can sit under the
+    // wires while pads/labels sit above them.
+    const open = `<g class="component${isSel ? ' selected' : ''}" data-id="${comp.instance_id}" `
             + `transform="translate(${comp.x} ${comp.y}) rotate(${rot} ${cx} ${cy}) `
             + `translate(${cx} ${cy}) scale(${sx} ${sy}) translate(${-cx} ${-cy})">`;
 
     // Board body (shadow + fill + inset silkscreen line)
-    svgOut += `<path class="board-shadow" d="${boardPath(w, h, t.corners)}" transform="translate(2 3)"/>`;
-    svgOut += `<path class="board-body" d="${boardPath(w, h, t.corners)}"/>`;
-    svgOut += `<path class="board-inner" d="${boardPath(w - 6, h - 6, t.corners)}" transform="translate(3 3)"/>`;
+    boardOut += open;
+    boardOut += `<path class="board-shadow" d="${boardPath(w, h, t.corners)}" transform="translate(2 3)"/>`;
+    boardOut += `<path class="board-body" d="${boardPath(w, h, t.corners)}"/>`;
+    boardOut += `<path class="board-inner" d="${boardPath(w - 6, h - 6, t.corners)}" transform="translate(3 3)"/>`;
 
     // Mounting holes (preset "WxH" span or custom spanX/spanY)
     const mh = t.mounting_holes;
@@ -1112,17 +1270,21 @@ function renderComponents() {
       const r = (mh.diameter || 3) / 2 * SCALE;
       [[ix, iy], [t.width - ix, iy], [ix, t.height - iy], [t.width - ix, t.height - iy]]
         .forEach(([mx, my]) => {
-          svgOut += `<circle class="hole-copper" cx="${mx * SCALE}" cy="${my * SCALE}" r="${r + 1.1}"/>`;
-          svgOut += `<circle class="hole-ring" cx="${mx * SCALE}" cy="${my * SCALE}" r="${r}"/>`;
+          boardOut += `<circle class="hole-copper" cx="${mx * SCALE}" cy="${my * SCALE}" r="${r + 1.1}"/>`;
+          boardOut += `<circle class="hole-ring" cx="${mx * SCALE}" cy="${my * SCALE}" r="${r}"/>`;
         });
     }
 
     // Connector bodies — one per connector group on each edge
     for (const edge of EDGES) {
       for (const item of layoutEdge(t, edge)) {
-        if (item.group.kind === 'connector') svgOut += connectorMarkup(t, edge, item);
+        if (item.group.kind === 'connector') boardOut += connectorMarkup(t, edge, item);
       }
     }
+    boardOut += `</g>`;
+
+    // ---- Pad layer (over the wires) ----
+    padOut += open;
 
     // Pads & connector pins (magnetic targets)
     for (const tgt of componentTargets(t)) {
@@ -1135,42 +1297,61 @@ function renderComponents() {
       });
 
       if (tgt.kind === 'pin') {
-        svgOut += `<g class="snap-target" data-comp="${comp.instance_id}" data-target="${tgt.id}">`;
-        svgOut += `<circle class="pin-hit" cx="${local.x}" cy="${local.y}" r="6"/>`;
-        svgOut += `<circle class="pin-copper" cx="${local.x}" cy="${local.y}" r="2.2"/>`;
-        svgOut += `</g>`;
+        padOut += `<g class="snap-target" data-comp="${comp.instance_id}" data-target="${tgt.id}">`;
+        padOut += `<circle class="pin-hit" cx="${local.x}" cy="${local.y}" r="6"/>`;
+        padOut += `<circle class="pin-copper" cx="${local.x}" cy="${local.y}" r="2.2"/>`;
+        padOut += `</g>`;
       } else {
-        // Label offset follows the group's labelSide (per-row / per-column).
-        let lx = local.x, ly = local.y, anchor = 'middle';
+        // Label sits on labelSide, offset outward from the pad.
         const side = tgt.labelSide;
-        if (side === 'left')        { lx -= 8; anchor = 'end'; }
-        else if (side === 'right')  { lx += 8; anchor = 'start'; }
-        else if (side === 'bottom') { ly += 12; }
-        else                        { ly -= 8; }   // 'top'
+        const sv = SIDE_VEC[side] || { x: 0, y: 1 };
 
-        svgOut += `<g class="snap-target" data-comp="${comp.instance_id}" data-target="${tgt.id}">`;
-        svgOut += `<circle class="pad-hit" cx="${local.x}" cy="${local.y}" r="9"/>`;
-        svgOut += `<rect class="pad-copper" x="${local.x - 3.6}" y="${local.y - 3.6}" width="7.2" height="7.2" rx="1.6"/>`;
-        svgOut += `<circle class="pad-dot" cx="${local.x}" cy="${local.y}" r="1.2"/>`;
-        svgOut += `<text class="pad-label" x="${lx}" y="${ly}" text-anchor="${anchor}">${esc(tgt.label)}</text>`;
-        svgOut += `</g>`;
+        // Anchor the text to the pad: the reading direction (after rotation)
+        // points away from the board, so the near end sits at the pad and the
+        // string fans outward instead of straddling the pin. Centred labels
+        // need a little more clearance than the anchored (fanned) ones.
+        const rot = tgt.labelRot || 0;
+        const rad = rot * Math.PI / 180;
+        const dot = Math.cos(rad) * sv.x + Math.sin(rad) * sv.y;
+        const anchor = dot > 0.01 ? 'start' : dot < -0.01 ? 'end' : 'middle';
+        const gap = anchor === 'middle' ? 8 : 4.5;
+        const lx = local.x + sv.x * gap;
+        const ly = local.y + sv.y * gap;
+        const rotAttr = rot ? ` transform="rotate(${rot} ${lx} ${ly})"` : '';
+
+        padOut += `<g class="snap-target" data-comp="${comp.instance_id}" data-target="${tgt.id}">`;
+        const cc = connColor.get(comp.instance_id + '\u0000' + tgt.id);
+        padOut += `<circle class="pad-hit" cx="${local.x}" cy="${local.y}" r="9"/>`;
+        padOut += `<rect class="pad-copper" x="${local.x - 3.6}" y="${local.y - 3.6}" width="7.2" height="7.2" rx="1.6"/>`;
+        if (cc) padOut += `<circle class="pad-conn" cx="${local.x}" cy="${local.y}" r="2.4" fill="${esc(cc)}"/>`;
+        padOut += `<circle class="pad-dot" cx="${local.x}" cy="${local.y}" r="${cc ? 0.9 : 1.2}"/>`;
+        padOut += `<text class="pad-label" x="${lx}" y="${ly}" text-anchor="${anchor}"`
+               + ` dominant-baseline="central"${rotAttr}>${esc(tgt.label)}</text>`;
+        padOut += `</g>`;
       }
     }
 
-    // Component label below the board
-    svgOut += `<text class="comp-label" x="${w / 2}" y="${h + 14}">${esc(comp.label)}</text>`;
+    // Component name label, placed per comp.labelPos (relative to the board).
+    padOut += compLabelMarkup(comp, w, h);
 
     // Selection outline + corner handles (edit mode only)
     if (isSel && state.mode === 'edit') {
-      svgOut += `<rect class="sel-box" x="-4" y="-4" width="${w + 8}" height="${h + 8}" rx="3"/>`;
+      padOut += `<rect class="sel-box" x="-4" y="-4" width="${w + 8}" height="${h + 8}" rx="3"/>`;
       [[-4, -4], [w + 4, -4], [-4, h + 4], [w + 4, h + 4]].forEach(([hx, hy]) => {
-        svgOut += `<circle class="sel-handle" cx="${hx}" cy="${hy}" r="3.2"/>`;
+        padOut += `<circle class="sel-handle" cx="${hx}" cy="${hy}" r="3.2"/>`;
       });
     }
-    svgOut += `</g>`;
+    padOut += `</g>`;
   }
 
-  layerComponents.innerHTML = svgOut;
+  // Lateral dodge so stacked-row wires clear the pad row in front of them.
+  const dodges = computePadDodges();
+  for (const tgt of targets) {
+    if (tgt.kind === 'pad') tgt.dodge = dodges.get(tgt.compId + '\u0000' + tgt.id) || null;
+  }
+
+  layerBoards.innerHTML = boardOut;
+  layerPads.innerHTML = padOut;
   state._targets = targets;
 }
 
@@ -1181,11 +1362,13 @@ function renderComponents() {
  * Either direction may be null (e.g. a free-drawing cursor), in which case
  * that end falls back to a straight join.
  */
-function wirePath(a, dirA, b, dirB, route) {
-  return route === 'ortho' ? wirePathOrtho(a, dirA, b, dirB) : wirePathBezier(a, dirA, b, dirB);
+function wirePath(a, dirA, b, dirB, route, lane, obstacles, soft) {
+  if (route === 'bezier') { lastWireUnder = false; lastRoutePts = null; return wirePathBezier(a, dirA, b, dirB, lane); }
+  return wirePathOrtho(a, dirA, b, dirB, lane, obstacles, soft);
 }
 
-function wirePathBezier(a, dirA, b, dirB) {
+function wirePathBezier(a, dirA, b, dirB, lane) {
+  const off = lane && lane.off;
   const dx = b.x - a.x, dy = b.y - a.y;
   const dist = Math.hypot(dx, dy) || 1;
 
@@ -1206,6 +1389,10 @@ function wirePathBezier(a, dirA, b, dirB) {
   const c2 = hasB ? { x: p2.x + dirB.x * k, y: p2.y + dirB.y * k }
                    : { x: b.x - dx * 0.5, y: b.y };
 
+  // Fan parallel wires apart ("side by side") by bowing the control points
+  // along a shared perpendicular axis.
+  if (off) { c1.x += off.x; c1.y += off.y; c2.x += off.x; c2.y += off.y; }
+
   let d = `M ${a.x} ${a.y}`;
   if (hasA) d += ` L ${p1.x} ${p1.y}`;
   d += ` C ${c1.x} ${c1.y} ${c2.x} ${c2.y} ${p2.x} ${p2.y}`;
@@ -1213,34 +1400,248 @@ function wirePathBezier(a, dirA, b, dirB) {
   return d;
 }
 
+/* --- Obstacle-avoiding orthogonal router (A* on a Hanan grid) --- */
+const ROUTE_CLEAR = 6;     // px clearance kept from every part
+const ROUTE_TURN = 30;     // px-equivalent cost per corner (prefers few bends)
+
+// Set by wirePathOrtho: true when the direct route had to cut across a part
+// (no clear way around), so renderWires can tuck it beneath the part bodies.
+let lastWireUnder = false;
+// Set by wirePathOrtho: the final polyline of the chosen route, so later wires
+// can treat earlier wires as thin obstacles and stay a few px apart.
+let lastRoutePts = null;
+
+function pointInBox(p, b, pad) {
+  pad = pad || 0;
+  return p.x > b.minX - pad && p.x < b.maxX + pad
+      && p.y > b.minY - pad && p.y < b.maxY + pad;
+}
+
+function dirIndex(d) {
+  if (d.x > 0) return 0;
+  if (d.x < 0) return 1;
+  if (d.y > 0) return 2;
+  return 3;
+}
+
+/** Walk out along `dir` until clear of every part (inflated by `clear`).
+ *  Jumps straight to the boundary so the stub never overshoots its track. */
+function extendOut(p, dir, boxes, clear) {
+  let t = 8;
+  for (let iter = 0; iter < 24; iter++) {
+    const q = { x: p.x + dir.x * t, y: p.y + dir.y * t };
+    let bumped = false;
+    for (const b of boxes) {
+      if (!pointInBox(q, b, clear)) continue;
+      let tb;
+      if (dir.x > 0) tb = (b.maxX + clear) - p.x;
+      else if (dir.x < 0) tb = p.x - (b.minX - clear);
+      else if (dir.y > 0) tb = (b.maxY + clear) - p.y;
+      else tb = p.y - (b.minY - clear);
+      if (tb >= t) { t = tb + 0.5; bumped = true; }
+    }
+    if (!bumped) return q;
+  }
+  return { x: p.x + dir.x * t, y: p.y + dir.y * t };
+}
+
+/** Thin boxes tracing already-routed wire polylines, so new wires keep clear.
+ *  Very short segments (pad stubs) are skipped so neighbouring pads in a row
+ *  don't block each other. */
+function softObstacles(polylines) {
+  const half = 1, minLen = 12;
+  const out = [];
+  for (const pts of (polylines || [])) {
+    for (let s = 0; s < pts.length - 1; s++) {
+      const p = pts[s], q = pts[s + 1];
+      if (Math.hypot(q.x - p.x, q.y - p.y) < minLen) continue;
+      out.push({
+        minX: Math.min(p.x, q.x) - half, maxX: Math.max(p.x, q.x) + half,
+        minY: Math.min(p.y, q.y) - half, maxY: Math.max(p.y, q.y) + half
+      });
+    }
+  }
+  return out;
+}
+
+function hClear(lo, hi, y, boxes, clear) {
+  const e = 0.01;
+  for (const b of boxes) {
+    if (y > b.minY - clear + e && y < b.maxY + clear - e
+        && hi > b.minX - clear + e && lo < b.maxX + clear - e) return false;
+  }
+  return true;
+}
+function vClear(lo, hi, x, boxes, clear) {
+  const e = 0.01;
+  for (const b of boxes) {
+    if (x > b.minX - clear + e && x < b.maxX + clear - e
+        && hi > b.minY - clear + e && lo < b.maxY + clear - e) return false;
+  }
+  return true;
+}
+
+/** True if any sampled point of `pts` cuts through a part, ignoring the short
+ *  stub regions right at each pad (which legitimately sit on their own board). */
+function polylineCrosses(pts, boxes, a, b) {
+  const shrink = 2, skip = 24;
+  for (let s = 0; s < pts.length - 1; s++) {
+    const p = pts[s], q = pts[s + 1];
+    const len = Math.hypot(q.x - p.x, q.y - p.y);
+    const steps = Math.max(1, Math.ceil(len / 3));
+    for (let t = 0; t <= steps; t++) {
+      const x = p.x + (q.x - p.x) * t / steps;
+      const y = p.y + (q.y - p.y) * t / steps;
+      if (Math.hypot(x - a.x, y - a.y) < skip) continue;
+      if (Math.hypot(x - b.x, y - b.y) < skip) continue;
+      for (const box of boxes) {
+        if (x > box.minX + shrink && x < box.maxX - shrink
+            && y > box.minY + shrink && y < box.maxY - shrink) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Route orthogonally around the parts with A* over a Hanan grid (obstacle
+ * edges + both stub ends). Returns [a, stubA, ...tracks..., stubB, b] or null
+ * when no clear path exists (the caller then falls back to the direct route).
+ */
+function routeAround(a, dirA, b, dirB, boxes, soft) {
+  const clear = ROUTE_CLEAR;
+  if (soft && soft.length) boxes = boxes.concat(softObstacles(soft));
+  const sA = extendOut(a, dirA, boxes, clear);
+  const sB = extendOut(b, dirB, boxes, clear);
+  if (!sA || !sB) return null;
+
+  const xsSet = new Set([a.x, b.x, sA.x, sB.x]);
+  const ysSet = new Set([a.y, b.y, sA.y, sB.y]);
+  for (const box of boxes) {
+    xsSet.add(box.minX - clear); xsSet.add(box.maxX + clear);
+    ysSet.add(box.minY - clear); ysSet.add(box.maxY + clear);
+  }
+  const X = [...xsSet].sort((m, n) => m - n);
+  const Y = [...ysSet].sort((m, n) => m - n);
+  const nx = X.length, ny = Y.length;
+
+  const ok = [];
+  for (let i = 0; i < nx; i++) {
+    ok[i] = [];
+    for (let j = 0; j < ny; j++) {
+      const p = { x: X[i], y: Y[j] };
+      let free = true;
+      for (const box of boxes) if (pointInBox(p, box, clear)) { free = false; break; }
+      ok[i][j] = free;
+    }
+  }
+  const si = X.indexOf(sA.x), sj = Y.indexOf(sA.y);
+  const ti = X.indexOf(sB.x), tj = Y.indexOf(sB.y);
+  if (si < 0 || sj < 0 || ti < 0 || tj < 0) return null;
+  ok[si][sj] = true; ok[ti][tj] = true;      // stub ends are always usable
+
+  const DX = [1, -1, 0, 0], DY = [0, 0, 1, -1];
+  const key = (i, j, d) => (i * ny + j) * 4 + d;
+  const dist = new Map(), prev = new Map();
+  const sd = dirIndex(dirA);
+  dist.set(key(si, sj, sd), 0);
+  const open = [{ i: si, j: sj, d: sd, g: 0,
+                  f: Math.abs(X[si] - X[ti]) + Math.abs(Y[sj] - Y[tj]) }];
+  const closed = new Set();
+  let goal = null;
+
+  while (open.length) {
+    let bi = 0;
+    for (let k = 1; k < open.length; k++) if (open[k].f < open[bi].f) bi = k;
+    const cur = open.splice(bi, 1)[0];
+    const ck = key(cur.i, cur.j, cur.d);
+    if (closed.has(ck)) continue;
+    closed.add(ck);
+    if (cur.i === ti && cur.j === tj) { goal = ck; break; }
+    for (let d = 0; d < 4; d++) {
+      const ni = cur.i + DX[d], nj = cur.j + DY[d];
+      if (ni < 0 || ni >= nx || nj < 0 || nj >= ny || !ok[ni][nj]) continue;
+      const segOk = (d < 2)
+        ? hClear(Math.min(X[cur.i], X[ni]), Math.max(X[cur.i], X[ni]), Y[cur.j], boxes, clear)
+        : vClear(Math.min(Y[cur.j], Y[nj]), Math.max(Y[cur.j], Y[nj]), X[cur.i], boxes, clear);
+      if (!segOk) continue;
+      const step = (d < 2) ? Math.abs(X[ni] - X[cur.i]) : Math.abs(Y[nj] - Y[cur.j]);
+      const ng = cur.g + step + (d === cur.d ? 0 : ROUTE_TURN);
+      const nk = key(ni, nj, d);
+      if (ng < (dist.has(nk) ? dist.get(nk) : Infinity)) {
+        dist.set(nk, ng);
+        prev.set(nk, ck);
+        open.push({ i: ni, j: nj, d, g: ng,
+                    f: ng + Math.abs(X[ni] - X[ti]) + Math.abs(Y[nj] - Y[tj]) });
+      }
+    }
+  }
+  if (goal == null) return null;
+
+  const pts = [];
+  for (let k = goal; k != null; k = prev.has(k) ? prev.get(k) : null) {
+    const d = k % 4, ij = (k - d) / 4;
+    pts.push({ x: X[Math.floor(ij / ny)], y: Y[ij % ny] });
+  }
+  pts.reverse();
+  const full = [a, ...pts, b];
+  const dedup = [];
+  for (const p of full) {
+    const l = dedup[dedup.length - 1];
+    if (!l || Math.hypot(p.x - l.x, p.y - l.y) > 0.01) dedup.push(p);
+  }
+  // Collapse points that are already collinear with their neighbours.
+  const out = [];
+  for (let i = 0; i < dedup.length; i++) {
+    if (i === 0 || i === dedup.length - 1) { out.push(dedup[i]); continue; }
+    const p = dedup[i - 1], q = dedup[i], r = dedup[i + 1];
+    const cross = (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+    if (Math.abs(cross) > 0.01) out.push(q);
+  }
+  return out;
+}
+
 /**
  * Orthogonal (right-angle) route: leave each pad along its edge normal, join
  * the two stubs with axis-aligned segments, then round the corners slightly.
+ * Falls back to a grid search that routes around other parts.
  */
-function wirePathOrtho(a, dirA, b, dirB) {
+function wirePathOrtho(a, dirA, b, dirB, lane, obstacles, soft) {
   const hasA = dirA && (dirA.x || dirA.y);
   const hasB = dirB && (dirB.x || dirB.y);
-  const stub = 16;
+  const stub = Math.max(1, (state.wireLeadoutMm || 15) * SCALE);
   const p1 = hasA ? { x: a.x + dirA.x * stub, y: a.y + dirA.y * stub } : { x: a.x, y: a.y };
   const p2 = hasB ? { x: b.x + dirB.x * stub, y: b.y + dirB.y * stub } : { x: b.x, y: b.y };
+  const ox = lane && lane.off ? lane.off.x : 0;
+  const oy = lane && lane.off ? lane.off.y : 0;
 
-  const horizA = hasA && dirA.x !== 0;
-  const horizB = hasB && dirB.x !== 0;
+  // Classify by dominant axis: `dir.x !== 0` misreads tiny float residue
+  // (e.g. sin(pi) after a 180-degree flip) as horizontal, which sent
+  // vertical pairs down the mixed-corner branch and produced diagonal jumps.
+  const horizA = hasA && Math.abs(dirA.x) >= Math.abs(dirA.y);
+  const horizB = hasB && Math.abs(dirB.x) >= Math.abs(dirB.y);
 
   const pts = [{ x: a.x, y: a.y }];
   if (hasA) pts.push(p1);
 
   if (hasA && hasB) {
     if (horizA && horizB) {
-      const mx = (p1.x + p2.x) / 2;
+      const r = resolveCorridor((p1.x + p2.x) / 2, Math.min(p1.y, p2.y), Math.max(p1.y, p2.y), obstacles, false);
+      const mx = laneStack(r.value, r.dir, lane);   // vertical corridor
+      // Never let the stub overshoot the corridor (avoids "appendix" spikes).
+      p1.x = dirA.x > 0 ? Math.min(p1.x, mx) : Math.max(p1.x, mx);
+      p2.x = dirB.x > 0 ? Math.min(p2.x, mx) : Math.max(p2.x, mx);
       pts.push({ x: mx, y: p1.y }, { x: mx, y: p2.y });
     } else if (!horizA && !horizB) {
-      const my = (p1.y + p2.y) / 2;
+      const r = resolveCorridor((p1.y + p2.y) / 2, Math.min(p1.x, p2.x), Math.max(p1.x, p2.x), obstacles, true);
+      const my = laneStack(r.value, r.dir, lane);   // horizontal corridor
+      p1.y = dirA.y > 0 ? Math.min(p1.y, my) : Math.max(p1.y, my);
+      p2.y = dirB.y > 0 ? Math.min(p2.y, my) : Math.max(p2.y, my);
       pts.push({ x: p1.x, y: my }, { x: p2.x, y: my });
     } else if (horizA) {
-      pts.push({ x: p2.x, y: p1.y });
+      pts.push({ x: p2.x, y: p1.y + oy });
     } else {
-      pts.push({ x: p1.x, y: p2.y });
+      pts.push({ x: p1.x + ox, y: p2.y });
     }
   } else if (hasA) {
     if (horizA) pts.push({ x: p2.x, y: p1.y }); else pts.push({ x: p1.x, y: p2.y });
@@ -1250,6 +1651,15 @@ function wirePathOrtho(a, dirA, b, dirB) {
 
   pts.push(p2);
   if (hasB) pts.push({ x: b.x, y: b.y });
+
+  lastWireUnder = false;
+  lastRoutePts = pts;
+  if (obstacles && obstacles.length && hasA && hasB && polylineCrosses(pts, obstacles, a, b)) {
+    let routed = routeAround(a, dirA, b, dirB, obstacles, soft);
+    if (!routed && soft && soft.length) routed = routeAround(a, dirA, b, dirB, obstacles);
+    if (routed && routed.length > 1) { lastRoutePts = routed; return roundedPolyline(routed, 7); }
+    lastWireUnder = true;   // no way around: draw beneath the part bodies
+  }
   return roundedPolyline(pts, 7);
 }
 
@@ -1282,10 +1692,12 @@ function findTarget(compId, targetId) {
 }
 
 /* --- 6c. Committed wires --- */
-/** Default wire gauge (AWG) from the source pad's signal type. */
+/** Default wire gauge (AWG) for new wires: 30 AWG for everything.
+ *  TODO(later stages): implement wire gauge AUTO-SELECT from signal type /
+ *  current draw (e.g. power+gnd thicker, UART/control thinner) instead of
+ *  the fixed 30 AWG below. */
 function defaultGauge(signalType) {
-  const s = (signalType || '').toLowerCase();
-  return (s === 'ground' || s === 'power_pos') ? 18 : 26;
+  return 30;
 }
 
 /** A contrasting tint of a wire colour, for two-tone "striped" styling. */
@@ -1302,32 +1714,158 @@ function wireTint(hex) {
   return `#${h(c.r)}${h(c.g)}${h(c.b)}`;
 }
 
+/**
+ * Assign each wire a lane so wires that share the same pair of components are
+ * drawn as separate parallel "lanes" instead of overlapping. Returns a Map of
+ * wire id -> { index, count, off:{x,y}, perp:{x,y} }. `off` is the centred
+ * perpendicular offset (used by the Bézier router); `index`/`count` let the
+ * orthogonal router stack lanes onto the clear side of an obstacle.
+ */
+const WIRE_LANE_GAP = 6;   // px between parallel wires sharing the same comp pair
+
+function computeWireLanes() {
+  const lanes = new Map();
+  const groups = new Map();
+  for (const wire of state.wires) {
+    const a = findTarget(wire.from.comp, wire.from.target);
+    const b = findTarget(wire.to.comp, wire.to.target);
+    if (!a || !b) continue;
+    const forward = wire.from.comp < wire.to.comp;
+    const p = forward ? a.world : b.world;   // endpoint on the lesser comp id
+    const q = forward ? b.world : a.world;
+    const k0 = wire.from.comp, k1 = wire.to.comp;
+    const key = k0 < k1 ? k0 + '|' + k1 : k1 + '|' + k0;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ wire, p, q });
+  }
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    let ax = 0, ay = 0;
+    for (const it of list) { ax += it.q.x - it.p.x; ay += it.q.y - it.p.y; }
+    const al = Math.hypot(ax, ay) || 1;
+    const ux = ax / al, uy = ay / al;
+    const px = -uy, py = ux;                 // shared perpendicular axis
+    list.sort((m, n) => (m.p.x * ux + m.p.y * uy) - (n.p.x * ux + n.p.y * uy));
+    const mid = (list.length - 1) / 2;
+    list.forEach((it, i) => {
+      const o = (i - mid) * WIRE_LANE_GAP;
+      lanes.set(it.wire.id, {
+        index: i, count: list.length,
+        off: { x: px * o, y: py * o },
+        perp: { x: px, y: py }
+      });
+    });
+  }
+  return lanes;
+}
+
+/** Axis-aligned bounding box (world px) enclosing a rotated/flipped component. */
+function componentAABB(comp) {
+  const t = getTemplate(comp);
+  if (!t) return null;
+  const w = t.width * SCALE, h = t.height * SCALE;
+  const rad = (comp.rotation || 0) * Math.PI / 180;
+  const c = Math.abs(Math.cos(rad)), s = Math.abs(Math.sin(rad));
+  const hx = w / 2 * c + h / 2 * s;
+  const hy = w / 2 * s + h / 2 * c;
+  const cx = comp.x + w / 2, cy = comp.y + h / 2;
+  return { minX: cx - hx, maxX: cx + hx, minY: cy - hy, maxY: cy + hy };
+}
+
+/** Forbidden corridor intervals (on the variable axis) from obstacles that
+ *  overlap the corridor's span. `horiz` => variable is y, span is x. */
+const CORRIDOR_MARGIN = 8;
+function corridorIntervals(spanLo, spanHi, boxes, horiz) {
+  const out = [];
+  if (!boxes) return out;
+  for (const b of boxes) {
+    const oLo = horiz ? b.minX : b.minY;      // overlap check uses the span axis
+    const oHi = horiz ? b.maxX : b.maxY;
+    if (oHi < spanLo - CORRIDOR_MARGIN || oLo > spanHi + CORRIDOR_MARGIN) continue;
+    if (horiz) out.push([b.minY - CORRIDOR_MARGIN, b.maxY + CORRIDOR_MARGIN]);
+    else out.push([b.minX - CORRIDOR_MARGIN, b.maxX + CORRIDOR_MARGIN]);
+  }
+  return out;
+}
+
+function insideAny(v, iv) {
+  for (const [lo, hi] of iv) if (v > lo && v < hi) return true;
+  return false;
+}
+
+/**
+ * Nudge a corridor coordinate to the nearest position clear of every obstacle.
+ * Returns { value, dir } where dir is +1/-1 when the corridor had to move
+ * (pointing to the clear side) and 0 when the original position was fine.
+ */
+function resolveCorridor(base, spanLo, spanHi, boxes, horiz) {
+  const iv = corridorIntervals(spanLo, spanHi, boxes, horiz);
+  if (!iv.length || !insideAny(base, iv)) return { value: base, dir: 0 };
+  const cands = [base];
+  for (const [lo, hi] of iv) { cands.push(lo); cands.push(hi); }
+  let best = null, bestD = Infinity;
+  for (const c of cands) {
+    if (insideAny(c, iv)) continue;
+    const d = Math.abs(c - base);
+    if (d < bestD) { bestD = d; best = c; }
+  }
+  if (best === null) return { value: base, dir: 0 };
+  return { value: best, dir: best >= base ? 1 : -1 };
+}
+
+function laneStack(value, dir, lane) {
+  if (!lane || !lane.count || lane.count < 2) return value;
+  if (dir > 0) return value + lane.index * WIRE_LANE_GAP;
+  if (dir < 0) return value - lane.index * WIRE_LANE_GAP;
+  return value + (lane.index - (lane.count - 1) / 2) * WIRE_LANE_GAP;
+}
+
 function renderWires() {
-  let out = '';
+  const wireLanes = computeWireLanes();
+  // Every component's footprint, so routes can steer around other parts.
+  const boxes = state.components
+    .map(c => ({ id: c.instance_id, box: componentAABB(c) }))
+    .filter(x => x.box);
+  let out = '';       // wires drawn above the parts
+  let outU = '';      // wires with no clear route (drawn beneath the parts)
+  const routedPts = [];   // polylines of wires already placed, kept apart
   for (const wire of state.wires) {
     const a = findTarget(wire.from.comp, wire.from.target);
     const b = findTarget(wire.to.comp, wire.to.target);
     if (!a || !b) continue;
 
-    const d = wirePath(a.world, a.dir, b.world, b.dir, wire.route || 'bezier');
-    const w = gaugeWidth(wire.gauge || 24);
+    // Shift the wire anchor off stacked pads so it clears the row in front,
+    // joined back to the true pad centre with a short lead-in segment.
+    const aOff = a.dodge, bOff = b.dodge;
+    const aPos = aOff ? { x: a.world.x + aOff.x, y: a.world.y + aOff.y } : a.world;
+    const bPos = bOff ? { x: b.world.x + bOff.x, y: b.world.y + bOff.y } : b.world;
+    // All boards are obstacles: a route must approach its own pad from outside
+    // the board rather than crossing the board body.
+    const obstacles = boxes.map(o => o.box);
+    let d = aOff ? `M ${a.world.x} ${a.world.y} L ${aPos.x} ${aPos.y} ` : '';
+    d += wirePath(aPos, a.dir, bPos, b.dir, wire.route || 'ortho', wireLanes.get(wire.id), obstacles, routedPts);
+    if (bOff) d += ` L ${b.world.x} ${b.world.y}`;
+    if (lastRoutePts && lastRoutePts.length > 1) routedPts.push(lastRoutePts);
+    const w = gaugeWidth(wire.gauge || 30);
     const sel = (wire.id === selectedWireId) ? ' sel' : '';
     const pattern = wire.pattern || 'solid';
     const dash = (pattern === 'dashed')
       ? `stroke-dasharray:${(w * 2.6).toFixed(1)} ${(w * 1.9).toFixed(1)};`
       : '';
-
-    out += `<path class="wire-casing${sel}" style="stroke-width:${(w + 3).toFixed(1)}px;${dash}" d="${d}"/>`;
-    out += `<path class="wire${sel}" style="stroke-width:${w.toFixed(1)}px;${dash}" d="${d}" stroke="${wire.color}"/>`;
+    let seg = '';
+    seg += `<path class="wire-casing${sel}" style="stroke-width:${(w + 3).toFixed(1)}px;${dash}" d="${d}"/>`;
+    seg += `<path class="wire${sel}" style="stroke-width:${w.toFixed(1)}px;${dash}" d="${d}" stroke="${wire.color}"/>`;
     if (pattern === 'striped') {
       const sw = Math.max(1, w * 0.34);
-      out += `<path class="wire-stripe" style="stroke-width:${sw.toFixed(2)}px;`
+      seg += `<path class="wire-stripe" style="stroke-width:${sw.toFixed(2)}px;`
            + `stroke-dasharray:${(w * 1.4).toFixed(1)} ${(w * 1.1).toFixed(1)}" `
            + `d="${d}" stroke="${wireTint(wire.color)}"/>`;
     }
-    out += `<path class="wire-hit${sel}" data-wire="${wire.id}" d="${d}"/>`;
+    seg += `<path class="wire-hit${sel}" data-wire="${wire.id}" d="${d}"/>`;
+    if (lastWireUnder) outU += seg; else out += seg;
   }
   layerWires.innerHTML = out;
+  layerWiresUnder.innerHTML = outU;
 }
 
 /* --- 6d. In-progress wire + snap halo --- */
@@ -1493,7 +2031,7 @@ function onPointerUp(e) {
         color: signalColor(from.label, from.signal_type),
         gauge: defaultGauge(from.signal_type),
         pattern: 'solid',
-        route: 'bezier'
+        route: 'ortho'
       });
       scheduleSave();
     }
@@ -1562,6 +2100,14 @@ document.getElementById('snapSelect').addEventListener('change', e => {
   scheduleSave();
 });
 
+document.getElementById('leadoutInput').addEventListener('input', e => {
+  const v = num(e.target.value, NaN);
+  if (isNaN(v)) return;                     // ignore while the field is empty
+  state.wireLeadoutMm = Math.max(1, Math.min(50, v));
+  render();
+  scheduleSave();
+});
+
 document.getElementById('zoomIn').addEventListener('click', () =>
   zoomAt({ x: svg.clientWidth / 2, y: svg.clientHeight / 2 }, 1.2));
 document.getElementById('zoomOut').addEventListener('click', () =>
@@ -1590,6 +2136,7 @@ document.getElementById('addComp').addEventListener('click', () => {
   const c = screenToWorld({ x: svg.clientWidth / 2, y: svg.clientHeight / 2 });
   const comp = instantiate(id, t.name, snapToGrid(c.x), snapToGrid(c.y));
   state.components.push(comp);
+  if (id === 'fc') addPairedBack(comp, 0, 150);
   selectedId = comp.instance_id;
   renderPanel();
   render();
@@ -1606,6 +2153,7 @@ function instantiate(templateId, label, x, y, instanceId) {
     instance_id: instanceId || uid(),
     template_id: templateId,
     label: label,
+    labelPos: 'center',
     x: x, y: y,
     rotation: 0,
     flipX: false, flipY: false,
@@ -1613,26 +2161,48 @@ function instantiate(templateId, label, x, y, instanceId) {
   };
 }
 
+/** Companion link (FC front <-> FC back), pair_id set on both instances. */
+function linkedPair(comp) {
+  if (!comp) return null;
+  if (comp.pair_id) return state.components.find(c => c.instance_id === comp.pair_id) || null;
+  return state.components.find(c => c.pair_id === comp.instance_id) || null;
+}
+
+/** Spawn the back-side companion next to an FC and pair the two instances. */
+function addPairedBack(front, dx, dy) {
+  const back = instantiate('fc_back', TEMPLATES.fc_back.name, snapToGrid(front.x + dx), snapToGrid(front.y + dy));
+  back.pair_id = front.instance_id;
+  front.pair_id = back.instance_id;
+  state.components.push(back);
+  return back;
+}
+
 /** Built-in test setup: the full stack, with FC <-> ELRS pre-wired. */
 function seedState() {
+  const fc   = instantiate('fc',     'Flight Controller', 330,  90, 'fc_1');
+  const fcb  = instantiate('fc_back', 'FC Back',          480,  90, 'fcb_1');
+  fc.pair_id = fcb.instance_id;
+  fcb.pair_id = fc.instance_id;
   state = {
     mode: 'edit',
     background: 'dark_grid',
     gridSnap: 5,
     zoom: 1,
     pan: { x: 20, y: 20 },
+    wireLeadoutMm: 15,
     components: [
-      instantiate('fc',     'Flight Controller', 330,  90, 'fc_1'),
+      fc,
+      fcb,
       instantiate('elrs',   'ELRS Receiver',      60, 120, 'elrs_1'),
       instantiate('esc',    '4-in-1 ESC',        330, 360, 'esc_1'),
       instantiate('vtx',    'Analog VTX',         60, 330, 'vtx_1'),
       instantiate('camera', 'Analog Camera',      60, 560, 'cam_1')
     ],
     wires: [
-      { id: uid(), from: { comp:'fc_1', target:'fc_5v1' }, to: { comp:'elrs_1', target:'rx_5v'  }, color: WIRE_COLORS.power  },
-      { id: uid(), from: { comp:'fc_1', target:'fc_g1'  }, to: { comp:'elrs_1', target:'rx_gnd' }, color: WIRE_COLORS.ground },
-      { id: uid(), from: { comp:'fc_1', target:'fc_t2'  }, to: { comp:'elrs_1', target:'rx_rx'  }, color: WIRE_COLORS.tx     },
-      { id: uid(), from: { comp:'fc_1', target:'fc_r2'  }, to: { comp:'elrs_1', target:'rx_tx'  }, color: WIRE_COLORS.rx     }
+      { id: uid(), from: { comp:'fc_1', target:'fc_4v5_c' }, to: { comp:'elrs_1', target:'rx_5v'  }, color: WIRE_COLORS.power  },
+      { id: uid(), from: { comp:'fc_1', target:'fc_g9'    }, to: { comp:'elrs_1', target:'rx_gnd' }, color: WIRE_COLORS.ground },
+      { id: uid(), from: { comp:'fc_1', target:'fc_t6'    }, to: { comp:'elrs_1', target:'rx_rx'  }, color: WIRE_COLORS.tx     },
+      { id: uid(), from: { comp:'fc_1', target:'fc_r6'    }, to: { comp:'elrs_1', target:'rx_tx'  }, color: WIRE_COLORS.rx     }
     ],
     _targets: []
   };
@@ -1646,6 +2216,7 @@ function serializableState() {
     gridSnap: state.gridSnap,
     zoom: state.zoom,
     pan: state.pan,
+    wireLeadoutMm: state.wireLeadoutMm,
     components: state.components,
     wires: state.wires
   };
@@ -1660,6 +2231,44 @@ function persist() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState())); }
   catch (err) { /* storage may be unavailable (private mode) — ignore */ }
 }
+/** Normalise a raw project object into live `state` (migration + backfills).
+ *  Shared by localStorage loading and .fpv file imports. */
+function hydrateState(data) {
+  state = data;
+  state._targets = [];
+  state.gridSnap = (state.gridSnap === undefined) ? 5 : state.gridSnap;
+  state.wireLeadoutMm = (state.wireLeadoutMm === undefined) ? 15 : state.wireLeadoutMm;
+  state.background = state.background || 'dark_grid';
+  state.mode = state.mode || 'edit';
+  state.zoom = state.zoom || 1;
+  state.pan = state.pan || { x: 20, y: 20 };
+  state.components = Array.isArray(state.components) ? state.components : [];
+  state.wires = Array.isArray(state.wires) ? state.wires : [];
+  // Migrate older saves that referenced shared templates by id only.
+  state.components.forEach(c => {
+    if (!c.template) c.template = clone(TEMPLATES[c.template_id] || TEMPLATES.fc);
+    migrateTemplate(c.template);
+    c.rotation = c.rotation || 0;
+    c.flipX = !!c.flipX;
+    c.flipY = !!c.flipY;
+    c.labelPos = c.labelPos || 'center';
+  });
+  // Older saves predate the paired back-side part: spawn and link it now.
+  state.components.filter(c => c.template_id === 'fc').forEach(fc => {
+    if (linkedPair(fc)) return;
+    addPairedBack(fc, 150, 0);
+  });
+  // Backfill wire appearance attributes for older saves.
+  state.wires = state.wires.map(w => ({
+    ...w,
+    id: w.id || uid(),
+    color: w.color || WIRE_COLORS.aux,
+    gauge: w.gauge || 30,
+    pattern: w.pattern || 'solid',
+    route: w.route || 'ortho'
+  }));
+}
+
 function loadState() {
   let loaded = null;
   try {
@@ -1668,26 +2277,7 @@ function loadState() {
   } catch (err) { loaded = null; }
 
   if (loaded && Array.isArray(loaded.components)) {
-    state = loaded;
-    state._targets = [];
-    state.gridSnap = (state.gridSnap === undefined) ? 5 : state.gridSnap;
-    // Migrate older saves that referenced shared templates by id only.
-    state.components.forEach(c => {
-      if (!c.template) c.template = clone(TEMPLATES[c.template_id] || TEMPLATES.fc);
-      migrateTemplate(c.template);
-      c.rotation = c.rotation || 0;
-      c.flipX = !!c.flipX;
-      c.flipY = !!c.flipY;
-    });
-    // Backfill wire appearance attributes for older saves.
-    state.wires = (state.wires || []).map(w => ({
-      ...w,
-      id: w.id || uid(),
-      color: w.color || WIRE_COLORS.aux,
-      gauge: w.gauge || 24,
-      pattern: w.pattern || 'solid',
-      route: w.route || 'bezier'
-    }));
+    hydrateState(loaded);
   } else {
     seedState();
   }
@@ -1703,7 +2293,185 @@ function syncUI() {
   );
   document.getElementById('bgSelect').value = state.background;
   document.getElementById('snapSelect').value = String(state.gridSnap);
+  document.getElementById('leadoutInput').value = String(state.wireLeadoutMm);
 }
+
+/* =================================================================
+   10b. FILE EXPORT / IMPORT  (.fpv project, SVG, PNG)
+   ================================================================= */
+function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+function fileStamp() {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+}
+function statusFlash(msg) {
+  hoverInfo.textContent = msg;
+  clearTimeout(statusFlash.t);
+  statusFlash.t = setTimeout(() => { hoverInfo.textContent = ''; }, 4000);
+}
+
+/* ---- Project file (.fpv) ---- */
+function exportProject() {
+  const data = {
+    app: 'fpv-wiring-builder',
+    version: '1.4',
+    exported_at: new Date().toISOString(),
+    ...serializableState()
+  };
+  downloadBlob(`fpv-project-${fileStamp()}.fpv`,
+    new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+  statusFlash('Project saved as .fpv');
+}
+
+function importProject(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      if (!data || !Array.isArray(data.components) || !Array.isArray(data.wires)) {
+        throw new Error('not a valid project file');
+      }
+      hydrateState(data);
+      selectedId = null;
+      selectedWireId = null;
+      applyTransform();
+      render();
+      renderPanel();
+      syncUI();
+      scheduleSave();
+      statusFlash(`Imported "${file.name}" (${state.components.length} parts, ${state.wires.length} wires)`);
+    } catch (err) {
+      statusFlash('Import failed: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+/* ---- Drawing export (SVG / PNG) ---- */
+function unionBBox(acc, b) {
+  if (!acc) return { x: b.x, y: b.y, w: b.width, h: b.height };
+  const x1 = Math.min(acc.x, b.x), y1 = Math.min(acc.y, b.y);
+  const x2 = Math.max(acc.x + acc.w, b.x + b.width);
+  const y2 = Math.max(acc.y + acc.h, b.y + b.height);
+  return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+}
+
+/** Standalone SVG string of the schematic: no grid/UI chrome, content bbox,
+ *  full page CSS embedded so it renders identically outside the app. */
+function buildExportSvg() {
+  const pad = 24;
+  let bb = null;
+  for (const el of [layerWiresUnder, layerBoards, layerWires, layerPads]) {
+    if (!el.childElementCount) continue;
+    try { bb = unionBBox(bb, el.getBBox()); } catch (err) { /* not rendered */ }
+  }
+  if (!bb || bb.w <= 0 || bb.h <= 0) bb = { x: 0, y: 0, w: 400, h: 300 };
+
+  const out = svg.cloneNode(true);
+  // Strip interactive/background chrome, keep only the drawing.
+  // Strip background + invisible click bands + selection chrome. Pads/pins and
+  // their labels live inside .snap-target groups, so those must be KEPT.
+  out.querySelectorAll('#bgFill, #bgGrid, .grid-fill, .wire-hit, .sel-box, .sel-handle')
+    .forEach(n => n.remove());
+  out.querySelectorAll('.sel').forEach(n => n.classList.remove('sel'));   // no selection glow
+  const w = out.querySelector('#world');
+  if (w) w.removeAttribute('transform');
+  const overlay = out.querySelector('#layerOverlay');
+  if (overlay) overlay.innerHTML = '';
+  out.removeAttribute('class');
+  out.style.background = '';
+  out.removeAttribute('style');
+
+  const cfg = BG_MODES[state.background] || BG_MODES.dark_grid;
+  const x = bb.x - pad, y = bb.y - pad, vw = bb.w + pad * 2, vh = bb.h + pad * 2;
+  out.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  out.setAttribute('viewBox', `${x} ${y} ${vw} ${vh}`);
+  out.setAttribute('width', Math.round(vw));
+  out.setAttribute('height', Math.round(vh));
+
+  const NS = 'http://www.w3.org/2000/svg';
+  if (cfg.bg && cfg.bg !== 'transparent') {
+    const r = document.createElementNS(NS, 'rect');
+    r.setAttribute('x', x); r.setAttribute('y', y);
+    r.setAttribute('width', vw); r.setAttribute('height', vh);
+    r.setAttribute('fill', cfg.bg);
+    (w || out).insertBefore(r, (w || out).firstChild);
+  }
+  // Page stylesheet (includes :root CSS vars) + font fallback for stand-alone use.
+  const css = document.querySelector('style');
+  const styleEl = document.createElementNS(NS, 'style');
+  styleEl.textContent = 'svg{font-family:"Segoe UI",Inter,system-ui,-apple-system,Roboto,sans-serif;}\n'
+    + (css ? css.textContent : '');
+  out.insertBefore(styleEl, out.firstChild);
+  // Wire casing outline flips to dark on light backgrounds (body[data-bg] rule
+  // cannot apply outside the app document).
+  if (state.background === 'light_grid' || state.background === 'clean_white') {
+    out.style.setProperty('--casing', 'rgba(0,0,0,.28)');
+  }
+  return { str: new XMLSerializer().serializeToString(out), w: Math.round(vw), h: Math.round(vh) };
+}
+
+function exportSvg() {
+  const { str } = buildExportSvg();
+  downloadBlob(`fpv-schematic-${fileStamp()}.svg`,
+    new Blob([str], { type: 'image/svg+xml;charset=utf-8' }));
+  statusFlash('Drawing saved as .svg');
+}
+
+function exportPng() {
+  const { str, w, h } = buildExportSvg();
+  const url = URL.createObjectURL(new Blob([str], { type: 'image/svg+xml;charset=utf-8' }));
+  const img = new Image();
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    const scale = 2;                       // high-DPI (plan: "high-resolution export")
+    const c = document.createElement('canvas');
+    c.width = Math.round(w * scale);
+    c.height = Math.round(h * scale);
+    const ctx = c.getContext('2d');
+    const bg = (BG_MODES[state.background] || BG_MODES.dark_grid).bg;
+    if (bg && bg !== 'transparent') {
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, c.width, c.height);
+    }
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    try {
+      c.toBlob(b => {
+        if (!b) { statusFlash('PNG export failed'); return; }
+        downloadBlob(`fpv-schematic-${fileStamp()}.png`, b);
+        statusFlash(`Drawing saved as .png (${c.width}×${c.height})`);
+      });
+    } catch (err) {
+      statusFlash('PNG export failed: ' + err.message);
+    }
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); statusFlash('PNG export failed'); };
+  img.src = url;
+}
+
+/* ---- Toolbar wiring ---- */
+document.getElementById('exportGo').addEventListener('click', () => {
+  const kind = document.getElementById('exportSel').value;
+  if (kind === 'svg') exportSvg();
+  else if (kind === 'png') exportPng();
+  else exportProject();
+});
+document.getElementById('importGo').addEventListener('click', () =>
+  document.getElementById('importFile').click());
+document.getElementById('importFile').addEventListener('change', e => {
+  const f = e.target.files && e.target.files[0];
+  if (f) importProject(f);
+  e.target.value = '';                     // allow re-importing the same file
+});
 
 /* =================================================================
    11. COMPONENT PROPERTIES PANEL
@@ -1713,6 +2481,8 @@ const CORNER_LABELS = { top_left:'Top Left', top_right:'Top Right', bottom_left:
 const GROUP_ALIGN_OPTS = [['left','Left'], ['center','Center'], ['right','Right']];
 const LABEL_SIDES_H = [['top','Top'], ['bottom','Bottom']];     // top/bottom edges
 const LABEL_SIDES_V = [['left','Left'], ['right','Right']];      // left/right edges
+const LABEL_POS_OPTS = [['top','Top'], ['bottom','Bottom'], ['left','Left'], ['right','Right'], ['center','Center']];
+const LABEL_ROT_OPTS = [[0,'0&deg;'], [90,'90&deg;'], [180,'180&deg;'], [270,'270&deg;']];
 const SIGNAL_OPTS = [
   ['ground','GND'], ['power_pos','PWR'], ['video','VID'],
   ['uart_tx','TX'], ['uart_rx','RX'], ['telemetry','TLM'], ['aux','AUX']
@@ -1788,13 +2558,20 @@ function groupCardHTML(t, edge, item) {
     <div class="pad-line">
       <span class="pad-tag">Gap</span>
       <input class="pos-in" type="number" min="1" step="0.5" data-group-spacing="${g.id}"
-             value="${g.spacing != null ? g.spacing : 6}" title="Pad spacing (mm)">
+             value="${g.spacing != null ? g.spacing : 3}" title="Pad spacing (mm)"
+             ${g.fit ? 'disabled' : ''}>
+      <label class="pad-tag" title="Auto-fit the gap to the board edge"><input type="checkbox"
+             data-group-fit="${g.id}" ${g.fit ? 'checked' : ''}> Fit</label>
       <span class="pad-tag">Labels</span>
       <select class="grow" data-group-label="${g.id}" title="Which side the labels sit on">
         ${sides.map(([v, l]) => option(v, l, labelCur)).join('')}
       </select>
     </div>
     <div class="pad-line">
+      <span class="pad-tag">Rotate</span>
+      <select class="pos-in" data-group-labelrot="${g.id}" title="Label text rotation">
+        ${LABEL_ROT_OPTS.map(([v, l]) => option(v, l, g.labelRot || 0)).join('')}
+      </select>
       <button data-action="add-pad" data-group="${g.id}">+ Pad</button>
     </div>
     <div class="grp-pads" data-group-drop="${g.id}">${padsHTML}</div>
@@ -1866,6 +2643,10 @@ function renderPanel() {
 
   const edgesHTML = EDGES.map(edge => edgeSectionHTML(t, edge)).join('');
 
+  const partner = linkedPair(comp);
+  const pairRow = partner
+    ? `<div class="pp-row"><label>Paired</label><span>${esc(partner.label)}</span></div>` : '';
+
   panel.innerHTML = `
     <div class="pp-head">
       <h2>${esc(comp.label)}</h2>
@@ -1880,12 +2661,18 @@ function renderPanel() {
         <div class="pp-row"><label>Y (mm)</label><input type="number" step="0.5" data-field="y" value="${(comp.y / SCALE).toFixed(1)}"></div>
       </div>
       <div class="pp-row"><label>Rotation</label><input type="number" step="1" data-field="rotation" value="${comp.rotation || 0}"></div>
+      <div class="pp-row"><label>Name at</label>
+        <select data-field="labelPos">
+          ${LABEL_POS_OPTS.map(([v, l]) => option(v, l, comp.labelPos || 'center')).join('')}
+        </select>
+      </div>
       <div class="pp-btnrow">
         <button data-action="rot-90">-90&deg;</button>
         <button data-action="rot90">+90&deg;</button>
         <button data-action="flipx" class="${comp.flipX ? 'on' : ''}">Flip H</button>
         <button data-action="flipy" class="${comp.flipY ? 'on' : ''}">Flip V</button>
       </div>
+      ${pairRow}
     </div>
 
     <div class="pp-section">
@@ -1945,7 +2732,7 @@ function renderWirePanel(wire) {
       </div>
       <div class="pp-row"><label>Gauge</label>
         <select data-wire-prop="gauge">
-          ${GAUGE_OPTS.map(g => option(g, g + ' AWG', wire.gauge || 24)).join('')}
+          ${GAUGE_OPTS.map(g => option(g, g + ' AWG', wire.gauge || 30)).join('')}
         </select>
       </div>
       <div class="pp-row"><label>Style</label>
@@ -1957,8 +2744,8 @@ function renderWirePanel(wire) {
       </div>
       <div class="pp-row"><label>Route</label>
         <select data-wire-prop="route">
-          ${option('bezier', 'Curved',      wire.route || 'bezier')}
-          ${option('ortho',  'Right-angle', wire.route || 'bezier')}
+          ${option('bezier', 'Curved',      wire.route || 'ortho')}
+          ${option('ortho',  'Right-angle', wire.route || 'ortho')}
         </select>
       </div>
     </div>
@@ -1975,6 +2762,7 @@ function renderWirePanel(wire) {
 function applyCompField(comp, t, field, value) {
   switch (field) {
     case 'label':    comp.label = value; break;
+    case 'labelPos': comp.labelPos = value; break;
     case 'x':        comp.x = num(value, comp.x / SCALE) * SCALE; break;
     case 'y':        comp.y = num(value, comp.y / SCALE) * SCALE; break;
     case 'rotation': comp.rotation = num(value, comp.rotation || 0); break;
@@ -2021,7 +2809,7 @@ function doPanelAction(actionEl, comp, t) {
         list.push(connGroup('g' + uid(), 'center',
           { id: 'c' + uid(), type: 'jst_sh_socket', pins: 4, pitch: 4 }));
       } else {
-        list.push(padsGroup('g' + uid(), 'center', 5, [
+        list.push(padsGroup('g' + uid(), 'center', 3, [
           { id: 'p' + uid(), label: 'NEW', signal_type: 'aux', visible: true } ]));
       }
       renderPanel(); render(); scheduleSave(); return;
@@ -2061,11 +2849,14 @@ function doPanelAction(actionEl, comp, t) {
       renderPanel(); render(); scheduleSave(); return;
     }
 
-    case 'del-comp':
-      state.components = state.components.filter(c => c.instance_id !== comp.instance_id);
-      state.wires = state.wires.filter(w =>
-        w.from.comp !== comp.instance_id && w.to.comp !== comp.instance_id);
+    case 'del-comp': {
+      const ids = new Set([comp.instance_id]);
+      const partner = linkedPair(comp);
+      if (partner) ids.add(partner.instance_id);
+      state.components = state.components.filter(c => !ids.has(c.instance_id));
+      state.wires = state.wires.filter(w => !ids.has(w.from.comp) && !ids.has(w.to.comp));
       selectedId = null; renderPanel(); render(); scheduleSave(); return;
+    }
   }
   renderPanel(); render(); scheduleSave();
 }
@@ -2079,7 +2870,7 @@ function handlePanel(e) {
     const wp = e.target.closest('[data-wire-prop]');
     if (wp) {
       const p = wp.dataset.wireProp;
-      wire[p] = (p === 'gauge') ? num(wp.value, wire.gauge || 24) : wp.value;
+      wire[p] = (p === 'gauge') ? num(wp.value, wire.gauge || 30) : wp.value;
       render(); scheduleSave();
     }
     return;
@@ -2110,9 +2901,16 @@ function handlePanel(e) {
   if (grpSpace) {
     const hit = findGroupId(t, grpSpace.dataset.groupSpacing);
     if (hit) {
-      hit.group.spacing = Math.max(1, num(grpSpace.value, hit.group.spacing || 6));
+      hit.group.spacing = Math.max(1, num(grpSpace.value, hit.group.spacing || 3));
       render(); scheduleSave();
     }
+    return;
+  }
+
+  const grpFit = e.target.closest('[data-group-fit]');
+  if (grpFit) {
+    const hit = findGroupId(t, grpFit.dataset.groupFit);
+    if (hit) { hit.group.fit = grpFit.checked; render(); renderPanel(); scheduleSave(); }
     return;
   }
 
@@ -2120,6 +2918,13 @@ function handlePanel(e) {
   if (grpLabel) {
     const hit = findGroupId(t, grpLabel.dataset.groupLabel);
     if (hit) { hit.group.labelSide = grpLabel.value; render(); scheduleSave(); }
+    return;
+  }
+
+  const grpRot = e.target.closest('[data-group-labelrot]');
+  if (grpRot) {
+    const hit = findGroupId(t, grpRot.dataset.groupLabelrot);
+    if (hit) { hit.group.labelRot = num(grpRot.value, 0); render(); scheduleSave(); }
     return;
   }
 
@@ -2216,7 +3021,7 @@ function removeGroupById(t, id) {
 function padsGroupOn(t, edge) {
   const list = t.edges[edge] || (t.edges[edge] = []);
   let g = list.find(x => x.kind === 'pads');
-  if (!g) { g = padsGroup('g' + uid(), 'center', 6, []); list.push(g); }
+  if (!g) { g = padsGroup('g' + uid(), 'center', 3, []); list.push(g); }
   return g;
 }
 
