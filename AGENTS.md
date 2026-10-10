@@ -23,7 +23,7 @@ The `<script>` is divided into 12 numbered `====` sections (line numbers shift; 
 
 ## Persistence & migration (easy to break)
 
-- localStorage key `fpv_builder_phase1_v1`, debounced 300 ms save.
+- localStorage key `fpv_wiring_builder_v1`, debounced 300 ms save.
 - `hydrateState()` is the **single migration path** for both localStorage loads and `.fpv` file imports. Any new persisted field must get a backfill there (see how `gridSnap`, `wireLeadoutMm`, wire `gauge/pattern/route` are handled) and be added to `serializableState()`.
 - Defaults are backfilled on read only — old stored values are never overwritten. To test fresh defaults, clear the storage key first (browser devtools), otherwise old values (lead-out 10, gauges 18/26, `route:'bezier'`) mask them.
 - `state._targets` is derived during render — never serialize it.

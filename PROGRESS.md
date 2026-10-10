@@ -16,7 +16,7 @@ Legend: `[x]` done · `[~]` partial / needs verification · `[ ]` not started
 - [x] Edit / Preview modes
 - [x] Backgrounds: Dark Grid (default), Light Grid, Blueprint, Clean White, Transparent
 - [x] Page title and header tagline use the current app name/scope without obsolete numbered phase labels
-- [x] `localStorage` persistence (`fpv_builder_phase1_v1`) with save migration/backfill
+- [x] `localStorage` persistence (`fpv_wiring_builder_v1`) with save migration/backfill
 - [x] Browser verification on GitHub Pages (2026-10-10): malformed component/wire imports are rejected without changing the board; `.fpv` export → import restores 10 parts and 4 wires; SVG and PNG downloads complete; no browser console errors. Pointer-cancel and new-wire drag gestures were not reproduced by browser automation and remain unverified.
 
 ### Snapping
