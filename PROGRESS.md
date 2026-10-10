@@ -17,7 +17,7 @@ Legend: `[x]` done · `[~]` partial / needs verification · `[ ]` not started
 - [x] Backgrounds: Dark Grid (default), Light Grid, Blueprint, Clean White, Transparent
 - [x] Page title and header tagline use the current app name/scope without obsolete numbered phase labels
 - [x] `localStorage` persistence (`fpv_wiring_builder_v1`) with save migration/backfill
-- [x] Browser verification on GitHub Pages (2026-10-10): malformed component/wire imports are rejected without changing the board; `.fpv` export → import restores 10 parts and 4 wires; SVG and PNG downloads complete; no browser console errors. Pointer-cancel and new-wire drag gestures were not reproduced by browser automation and remain unverified.
+- [x] Browser verification on GitHub Pages (2026-10-10): title and 15 mm lead-out are current; Edit/Preview, zoom/reset, and background switching work; background choice persists after reload; malformed component/wire imports are rejected without changing the board; `.fpv` export → import restores 10 parts and 4 wires; SVG and PNG downloads complete; no browser console errors. Pointer-cancel and new-wire drag gestures were not reproduced by browser automation and remain unverified.
 
 ### Snapping
 - [x] Component body grid snap: 1 / 2 / 5 mm / Off
