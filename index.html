@@ -2013,7 +2013,11 @@ function onPointerDown(e) {
         render();                      // redraw with selection highlight
       }
       const wp = screenToWorld(e);
-      interaction = { type: 'drag', comp, offset: { x: wp.x - comp.x, y: wp.y - comp.y } };
+      interaction = {
+        type: 'drag', comp,
+        offset: { x: wp.x - comp.x, y: wp.y - comp.y },
+        startX: comp.x, startY: comp.y
+      };
       svg.setPointerCapture(e.pointerId);
       e.preventDefault();
     }
@@ -2082,6 +2086,21 @@ function onPointerUp(e) {
   }
 
   if (interaction.type === 'pan') document.body.classList.remove('is-panning');
+  interaction = null;
+  render();
+}
+
+function onPointerCancel() {
+  if (!interaction) return;
+  // A canceled gesture is not a completed edit. Restore transient pan/drag
+  // changes and discard any in-progress wire instead of committing it.
+  if (interaction.type === 'pan') {
+    state.pan = interaction.startPan;
+    document.body.classList.remove('is-panning');
+  } else if (interaction.type === 'drag') {
+    interaction.comp.x = interaction.startX;
+    interaction.comp.y = interaction.startY;
+  }
   interaction = null;
   render();
 }
@@ -2390,10 +2409,20 @@ function exportProject() {
 function importProject(file) {
   const reader = new FileReader();
   reader.onload = () => {
+    const previousState = state;
     try {
       const data = JSON.parse(reader.result);
       if (!data || !Array.isArray(data.components) || !Array.isArray(data.wires)) {
         throw new Error('not a valid project file');
+      }
+      const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+      if (!data.components.every(c => isRecord(c) && (c.template === undefined || isRecord(c.template)))) {
+        throw new Error('invalid project: each component must be an object with an optional template object');
+      }
+      if (!data.wires.every(w => isRecord(w) && isRecord(w.from) && isRecord(w.to)
+          && typeof w.from.comp === 'string' && typeof w.from.target === 'string'
+          && typeof w.to.comp === 'string' && typeof w.to.target === 'string')) {
+        throw new Error('invalid project: each wire must have valid from/to endpoints');
       }
       hydrateState(data);
       selectedId = null;
@@ -2405,6 +2434,7 @@ function importProject(file) {
       scheduleSave();
       statusFlash(`Imported "${file.name}" (${state.components.length} parts, ${state.wires.length} wires)`);
     } catch (err) {
+      state = previousState;
       statusFlash('Import failed: ' + err.message);
     }
   };
@@ -3210,7 +3240,7 @@ panel.addEventListener('dragend', onPanelDragEnd);
 svg.addEventListener('pointerdown', onPointerDown);
 svg.addEventListener('pointermove', onPointerMove);
 svg.addEventListener('pointerup', onPointerUp);
-svg.addEventListener('pointercancel', onPointerUp);
+svg.addEventListener('pointercancel', onPointerCancel);
 svg.addEventListener('wheel', onWheel, { passive: false });
 svg.addEventListener('contextmenu', e => e.preventDefault());
 

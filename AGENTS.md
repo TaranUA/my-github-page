@@ -2,10 +2,10 @@
 
 ## What this repo is
 
-- Single-file static app: everything (HTML/CSS/vanilla JS/SVG) lives in root `index.html` (~3160 lines). No `package.json`, no build, no Node, no CI, no tests, no lint. Do not add a toolchain or CDN deps unless explicitly asked.
+- Single-file static app: everything (HTML/CSS/vanilla JS/SVG) lives in root `index.html` (about 3.2k lines; count changes as features are added). No `package.json`, no build, no Node, no CI, no tests, no lint. Do not add a toolchain or CDN deps unless explicitly asked.
 - Deploys via GitHub Pages on push to `main`; root `index.html` must stay the entry point.
 - Spec: `DESIGN_RULES.md` (Part A = repo rules, Part B = FPV wiring-builder feature spec + `.fpv` JSON schema). Status/backlog: `PROGRESS.md` — it is the source of truth for done/verified/remaining; update it when you complete or verify work.
-- `DESIGN_RULES.md` has on-disk mojibake (`BÃ©zier`, `1â€"2`) from a UTF-8/Latin-1 double-encoding. Text is readable — don't propagate the broken chars into other files.
+- Keep documentation in UTF-8. `DESIGN_RULES.md` uses the current `.fpv` export shape; update its schema example when the export/import format changes.
 
 ## Verification (there are no tests)
 
@@ -35,4 +35,4 @@ The `<script>` is divided into 12 numbered `====` sections (line numbers shift; 
 - Panel/toolbar UI is built as template-string HTML with delegated events: `data-action` attributes routed through `handlePanel()` / `onPanel*`. Add new controls via that pattern, not per-button listeners. Escape user text with the existing `esc()` helper.
 - Key constants: `ROUTE_CLEAR = 6`, `WIRE_LANE_GAP = 6`, lead-out default 15 mm, wire gauge default **30 AWG for all new wires** — the fixed default is a deliberate backlog item (`defaultGauge()` TODO), not a bug to "fix".
 - Pad/connector layout uses an ordered per-edge group model (`padsGroup`/`connGroup`); FC boards use sparse pad visibility by default.
-- `.fpv` files are plain JSON matching the schema in `DESIGN_RULES.md` §7 (version `1.4`); import goes through `hydrateState()`, so round-trip `export → import` is the regression check for state changes.
+- `.fpv` files are plain JSON in the current shape documented in `DESIGN_RULES.md` §7 (export version `1.4`); import goes through `hydrateState()`, so round-trip `export → import` is the regression check for state changes.

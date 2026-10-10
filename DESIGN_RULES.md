@@ -26,7 +26,7 @@
 
 3. **Deployment Trigger:**
    - Deploys automatically via GitHub Pages on every push to the **`main`** branch.
-   - Build delay is typically 1â€“2 minutes.
+   - Build delay is typically 1–2 minutes.
 
 ---
 
@@ -35,8 +35,8 @@
 When generating, modifying, or replacing code in this repository:
 
 1. **Maintain Standalone Integrity:**
-   - Ensure `index.html` remains self-contained unless external modular files are explicitly requested.
-   - Always include embedded Tailwind CSS (via CDN) or clean modern inline/style block CSS unless an external stylesheet is established.
+   - Keep `index.html` self-contained unless external modular files are explicitly requested.
+   - Use clean inline CSS. Do not add a CDN dependency or CSS framework unless explicitly requested.
 2. **Preserve Deployment Readiness:**
    - Do not break the root `index.html` entry point.
    - Avoid requiring build steps (like `npm run build`) unless a GitHub Actions workflow is explicitly configured for it.
@@ -48,10 +48,12 @@ When generating, modifying, or replacing code in this repository:
 
 ## Part B - FPV Visual Wiring Schematic Builder Design Rules
 
+This section describes the target feature set. The implementation status is tracked in [`PROGRESS.md`](PROGRESS.md); items listed here are not necessarily implemented yet.
+
 ### 1. Core Principles & Application Modes
 
 - **Physical Realism First:** Components visually resemble real FPV hardware (exact board shapes, corners, holes, active pads, connectors) to guide physical workbench soldering.
-- **Pure SVG Engine:** Render all components, pads, connectors, wires, and junctions on an interactive vector canvas (optimized for 10â€“15 components max).
+- **Pure SVG Engine:** Render all components, pads, connectors, wires, and junctions on an interactive vector canvas (optimized for 10–15 components max).
 - **Application Modes:**
   - **Edit Mode:** Active grid overlays, component dragging, parametric dimension editing, pad/connector management, and interactive wire routing.
   - **Preview Mode:** Clean presentation layout hiding all UI guides, grids, and handles. Optimized for workbench viewing, printing, and image export.
@@ -101,8 +103,8 @@ When drawing or dragging a wire segment:
 ### 4. Smart Wire & Splice Routing Engine
 
 #### 4.1 Interactive Routing Paths
-- **BÃ©zier Curves:** Smooth, organic curves with interactive control handles.
-- **Orthogonal 90Â° Paths:** Automated right-angle routing around board geometry.
+- **Bézier Curves:** Smooth, organic curves with interactive control handles.
+- **Orthogonal 90° Paths:** Automated right-angle routing around board geometry.
 - **Manual Segment Waypoints:** Click anywhere on the canvas to place intermediate anchor points before terminating at a target pad.
 
 #### 4.2 Multi-Wire Pads & In-Line Splices ($Y$-Harnesses)
@@ -144,59 +146,84 @@ When a wire is connected between pads, the app automatically assigns default wir
 
 ### 6. Project & Template Management
 
-- **Built-in FPV Hardware Library:** Pre-populated JSON templates for standard gear (Flight Controllers, 4-in-1 ESCs, Analog/Digital VTXs, ELRS RXs, Cameras, GPS, BECs, Buzzers).
-- **Custom Template Storage:** "Save as Template" option to store custom board profiles locally in browser storage.
-- **Self-Contained Single-File Format (`.json` / `.fpv`):** Project files embed all custom geometries, templates, and wire states for complete offline portability.
-- **High-Resolution Exports:** Vector SVG export, high-DPI PNG/JPEG image render, and workbench PDF print view.
+- **Current built-in library:** Flight Controller, 4-in-1 ESC, Analog VTX, ELRS RX, Analog Camera, Motor, and a blank Custom Part. Adding an FC also creates its paired FC Back Side companion; that companion is not a separate library option.
+- **Planned library additions:** GPS, BEC, buzzer, and additional VTX templates.
+- **Planned custom template storage:** "Save as Template" to store custom board profiles in browser storage.
+- **Current project format:** `.fpv` is a self-contained JSON project that stores placed components with their embedded editable templates, plus wire and view state. Its current exported shape is shown in §7.
+- **Current drawing exports:** Standalone SVG and 2× PNG. Print/PDF workbench output is planned, not implemented.
 
 ---
 
-### 7. Complete Project JSON Schema
+### 7. Current `.fpv` Export Shape (version 1.4)
+
+The app exports this top-level shape and imports files containing `components` and `wires` arrays. It does not currently use the older `app_state`, `library_templates`, `placed_components`, or `junctions` fields. Import runs through `hydrateState()`, which backfills defaults and migrates older component templates. `version` is written on export but is not currently checked by the importer.
+
+Component `x`/`y` coordinates are world-space pixels; template dimensions and pad layout values are millimetres. Each placed component embeds its own template copy, whose pads are represented in ordered per-edge groups.
 
 ```json
 {
+  "app": "fpv-wiring-builder",
   "version": "1.4",
-  "project_name": "Asymmetric Board Chamfer Build",
-  "app_state": {
-    "mode": "edit",
-    "background_mode": "dark_grid",
-    "zoom": 1.0,
-    "pan": { "x": 0, "y": 0 }
-  },
-  "library_templates": [
-    {
-      "template_id": "custom_vtx_plate",
-      "name": "Custom VTX Unit",
-      "width": 32,
-      "height": 24,
-      "corners": {
-        "top_left": { "type": "chamfer", "size": 3.0 },
-        "top_right": { "type": "chamfer", "size": 3.0 },
-        "bottom_left": { "type": "round", "size": 2.0 },
-        "bottom_right": { "type": "round", "size": 2.0 }
-      },
-      "mounting_holes": { "pattern": "20x20", "diameter": 2.1 },
-      "pads": [
-        { "id": "pad_gnd", "label": "GND", "edge": "top", "offset": 20, "signal_type": "ground", "visible": true },
-        { "id": "pad_vcc", "label": "BAT", "edge": "top", "offset": 40, "signal_type": "power_pos", "visible": true }
-      ]
-    }
-  ],
-  "placed_components": [
+  "exported_at": "2026-10-10T12:00:00.000Z",
+  "mode": "edit",
+  "background": "dark_grid",
+  "gridSnap": 5,
+  "zoom": 1.0,
+  "pan": { "x": 20, "y": 20 },
+  "wireLeadoutMm": 15,
+  "components": [
     {
       "instance_id": "vtx_1",
       "template_id": "custom_vtx_plate",
-      "label": "VTX (Asymmetric Corners)",
+      "label": "Custom VTX Unit",
+      "labelPos": "center",
       "x": 150,
       "y": 120,
       "rotation": 0,
-      "flipped": false
+      "flipX": false,
+      "flipY": false,
+      "template": {
+        "template_id": "custom_vtx_plate",
+        "name": "Custom VTX Unit",
+        "width": 32,
+        "height": 24,
+        "corners": {
+          "top_left": { "type": "chamfer", "size": 3 },
+          "top_right": { "type": "chamfer", "size": 3 },
+          "bottom_left": { "type": "round", "size": 2 },
+          "bottom_right": { "type": "round", "size": 2 }
+        },
+        "mounting_holes": { "pattern": "20x20", "diameter": 2.1 },
+        "edges": {
+          "top": [
+            {
+              "id": "g_vtx_top",
+              "kind": "pads",
+              "align": "center",
+              "spacing": 3,
+              "cross": 0,
+              "name": "",
+              "labelSide": "",
+              "labelRot": 0,
+              "fit": false,
+              "pads": [
+                { "id": "pad_gnd", "label": "GND", "signal_type": "ground", "visible": true },
+                { "id": "pad_vcc", "label": "BAT", "signal_type": "power_pos", "visible": true }
+              ]
+            }
+          ],
+          "right": [],
+          "bottom": [],
+          "left": []
+        }
+      }
     }
   ],
-  "junctions": [],
   "wires": []
 }
 ```
+
+Each wire entry stores an `id`, `from` and `to` endpoints (`comp` instance ID plus `target` pad/pin ID), `color`, `gauge`, `pattern`, and `route`.
 
 ### Later stages (backlog)
 

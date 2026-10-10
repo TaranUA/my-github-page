@@ -11,6 +11,7 @@ Legend: `[x]` done · `[~]` partial / needs verification · `[ ]` not started
 
 ### Core app
 - [x] Single self-contained `index.html` (vanilla JS/CSS, no build step), GitHub Pages ready
+- [x] Canceled pointer gestures discard in-progress wires and restore transient pan/drag changes; `.fpv` imports reject malformed component/wire entries before hydration
 - [x] Pure SVG canvas: pan (middle-click / spacebar / wheel), zoom 10–500%, reset
 - [x] Edit / Preview modes
 - [x] Backgrounds: Dark Grid (default), Light Grid, Blueprint, Clean White, Transparent
@@ -80,6 +81,7 @@ Legend: `[x]` done · `[~]` partial / needs verification · `[ ]` not started
 
 ### Docs
 - [x] `DESIGN_RULES.md` — repo context (Part A) + design spec (Part B) + backlog note
+- [x] Documentation sync — `.fpv` example matches the version 1.4 export/import shape; export capabilities, library status, CSS dependency guidance, and file-size note match the current app/repo constraints
 - [x] `PROGRESS.md` — this file
 
 ---
